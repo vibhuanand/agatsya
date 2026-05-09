@@ -1,0 +1,18 @@
+services:
+  agatsya:
+    build: .
+    container_name: agatsya-automation
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persist episode output on host
+      - ./app/storage:/agatsya/app/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

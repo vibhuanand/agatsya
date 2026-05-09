@@ -1,0 +1,12 @@
+{
+  "youtube_url": "https://www.youtube.com/watch?v=5bttM6SYuLE",
+  "episode_number": "001",
+  "case_hint": "Meika Jordan",
+  "target_duration_min": 22,
+  "cost_mode": "bootstrap",
+  "package_level": "script_first",
+  "style": "Agatsya Anand pure Hindi respectful dark true crime",
+  "enable_gpt_review": false,
+  "hinglish_level": 2,
+  "raw_transcript": "Meika Jordan was a six-year-old girl from Calgary, Alberta, Canada. Emergency services were called after a report that she had fallen down the stairs. Investigators later questioned whether the injuries matched that explanation. The case involved her father Spencer Jordan and stepmother Marie-Eve Magoon. The case later went through the courts and reached the Supreme Court of Canada. The story is sensitive because it involves a child victim, so the final episode must be respectful, factual, and not graphic. This sample payload is intentionally short; for a full local test, place the raw transcript at input/meika_transcript.txt and run python3 scripts/build_payload.py to regenerate this file locally."
+}

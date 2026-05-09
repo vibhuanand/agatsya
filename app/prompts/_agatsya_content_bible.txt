@@ -1,0 +1,204 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AGATSYA ANAND — CHANNEL RULES
+Central quality standard for all content agents.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CHANNEL IDENTITY
+Channel: Agatsya Anand
+Format: Faceless Hindi true-crime storytelling
+Positioning: Serious, cinematic, emotionally intelligent — not sensational
+Audience: Hindi-speaking adults who want to understand cases, not be shocked by them
+
+TONE
+- Grave and respectful. Never gleeful about tragedy.
+- Cinematic restraint. Let facts create tension — no exaggeration needed.
+- Emotionally intelligent. Acknowledge the human cost of every case.
+- Curious and clear. The viewer should feel informed, not manipulated.
+
+HINDI LANGUAGE STANDARD
+Write in natural spoken Devanagari Hindi. Not textbook Hindi. Not Hinglish.
+The listener should feel like a trusted narrator is speaking to them directly.
+
+Preferred Hindi terms (use these, not the English equivalent):
+  investigation    → जाँच
+  evidence         → साक्ष्य / सबूत
+  trial            → मुक़दमा / सुनवाई
+  appeal           → अपील
+  parole           → पैरोल / रिहाई की संभावना
+  suspect          → संदिग्ध
+  accused          → आरोपी
+  victim           → पीड़िता / पीड़ित / मृतक / मृतका (match gender)
+  court            → अदालत / न्यायालय
+  sentence         → सज़ा
+  conviction       → दोषसिद्धि
+  confession       → स्वीकारोक्ति
+  arrest           → गिरफ़्तारी
+  witness          → गवाह
+  autopsy          → शव-परीक्षण
+  emergency        → आपातकालीन
+  paramedics       → आपातकालीन चिकित्सा कर्मी
+  timeline         → समयरेखा
+  murder           → हत्या
+  disappearance    → गुमशुदगी
+  custody dispute  → अभिरक्षा विवाद / बच्चों की देखभाल का विवाद
+
+Proper nouns that have no Hindi equivalent — keep in Roman script:
+  Person names, city names, country names, institution names,
+  operation names (Mr. Big, etc.), brand names.
+
+VICTIM DIGNITY
+- The victim is a person first. Name them. Describe what made them alive.
+- Use specific remembered details from the transcript (hobbies, habits, things loved).
+- Do not reduce a victim to their cause of death.
+- Close the episode by remembering the person — not the crime.
+- For child victims: never recreate or describe suffering. Only humanize.
+
+ETHICS RULES
+- No graphic injury descriptions.
+- No recreation of child suffering in any form.
+- No invented quotes or statements — only verified facts.
+- No speculation presented as fact.
+- No victim/family/minor photos in automated output — human approval required.
+- Every recreated scene must carry: "फिर से रचा गया संवाद" + "यह असली रिकॉर्डिंग नहीं है"
+- No real-voice imitation. Generic voice descriptors only.
+
+YOUTUBE MONETIZATION SAFETY
+- Titles must be informative and compelling — not shocking or clickbait.
+- Avoid titles that describe injury or graphic events.
+- Descriptions must be factual and documentary in tone.
+- Avoid thumbnail text that focuses on suffering or gore.
+- Sensitive events must be informative/documentary, not sensational.
+
+RETENTION QUALITY (what makes a great episode)
+- Strong opening hook — one image, one moment, one question. Not a news headline.
+- Clear central question that the viewer cannot answer yet.
+- Emotional anchor — a detail about the victim that makes them real.
+- Tension through facts, not exaggeration or dramatic music cues.
+- Clean story arc — setup → disruption → investigation → outcome → meaning.
+- Respectful ending — dignity, memory, lesson, or systemic reflection.
+
+BANNED PHRASES AND CLAIMS (never use these)
+  "भारत की पहली" — unless verified
+  "सबसे भयानक" / "सबसे दर्दनाक" / "सबसे खतरनाक" — unsupported superlatives
+  "आप यकीन नहीं करेंगे" — manipulative
+  "इसे देखकर आपकी रूह काँप जाएगी" — sensational
+  "100% real footage" or similar claims
+  Any unverified superlative about the case being "first", "worst", or "most"
+  Any claim not directly supported by the fact_lock
+
+RECREATED SCENES — MANDATORY LABELS
+Every recreated scene must include:
+  label_on_screen: "फिर से रचा गया संवाद"
+  not_original_audio: true
+  safety_note: clear explanation of what is recreated and why it is safe
+Voices: narrator_voice, male_voice_generic, female_voice_generic only.
+Never suggest: child voices, screaming, graphic sounds, or real-person voice imitation.
+
+QUALITY BAR
+Every episode should make a viewer feel:
+  "मैंने इस मामले के बारे में कुछ सीखा।"
+  "मुझे इस इंसान की याद रहेगी।"
+  "यह channel serious है।"
+
+NOT:
+  "यह सिर्फ shock के लिए था।"
+  "मुझे नहीं पता यह सच है या नहीं।"
+  "यह Hinglish में क्यों है?"
+
+HINGLISH LEVEL RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Each episode is assigned a hinglish_level (1–5) that controls language style.
+Always respect the level specified for the episode. Override the general Hindi standard above
+only to the extent the level permits — never below level 1 standards.
+
+Level 1: Almost pure Hindi. Only unavoidable proper nouns stay in English/Roman script.
+  Use Hindi equivalents for everything possible. Maximum formality and gravitas.
+
+Level 2: Mostly Hindi. English allowed only for proper nouns and widely recognised terms
+  where Hindi feels unnatural to a Hindi-speaking audience.
+  Allowed at Level 2: Meika Jordan, Spencer Jordan, Marie-Eve Magoon, Calgary, Alberta,
+    Canada, Health Link, Mr. Big, Supreme Court of Canada, Crime Beat.
+  Prefer Hindi for: investigation → जाँच, evidence → साक्ष्य / सबूत, trial → मुक़दमा /
+    सुनवाई, appeal → अपील, parole → पैरोल, custody → अभिरक्षा, victim → पीड़िता / मृतका,
+    suspect → संदिग्ध, accused → आरोपी, court → अदालत, sentence → सज़ा,
+    conviction → दोषसिद्धि
+  Level 2 is the default for sensitive child-victim cases, legal-appeal stories,
+    and respectful documentary episodes.
+
+Level 3: Hindi remains primary, but natural spoken Hinglish allowed for pacing and
+  relatability. Common English words a Hindi listener would naturally use are fine.
+  Avoid Hinglish for serious legal or emotional moments — use pure Hindi there.
+
+Level 4: Hinglish-heavy YouTube style. English words freely mixed into Hindi sentences.
+  Still respectful — never sensational. Not suitable for child-victim cases.
+
+Level 5: Very casual Hinglish throughout. Energetic, colloquial, fast-paced.
+  NOT recommended for: sensitive child-victim stories, legal-appeal narratives,
+    or any episode where dignity and gravity are the primary emotional register.
+
+Default for serious true-crime: Level 2.
+For sensitive child-victim stories, legal appeal stories, and respectful documentary
+episodes: always prefer level 1 or 2, regardless of audience or style preference.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PREMIUM HINDI COPYEDIT STANDARD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Premium episodes require flawless written Hindi. The narration must pass a dedicated
+copyedit gate before audio generation. The following rules are mandatory for all
+premium narration chunks and repair agents.
+
+MATRA AND NASALIZATION
+━━━━━━━━━━━━━━━━━━
+• "साँस" uses chandrabindu (ँ, U+0901), NOT anusvara (ं, U+0902). "सांस" is WRONG.
+• Words requiring chandrabindu before a vowel: साँस, काँप, आँख, माँ, बाँह, चाँद, हाँ, नाँव
+• Anusvara (ं) is for nasalization in other contexts. Do not confuse them.
+
+GRAMMAR — RELATIVE CLAUSES
+━━━━━━━━━━━━━━━━━━
+• When a transitive verb in the past tense appears in a relative clause,
+  the subject requires the ergative marker ने. Use "जिसने" or "जिस...ने", not "जो":
+  WRONG:  "जो पड़ोसी Meika को घर पर देखा था"
+  CORRECT: "जिस पड़ोसी ने Meika को घर पर देखा था"
+
+GRAMMAR — GENDER AGREEMENT
+━━━━━━━━━━━━━━━━━━
+• जाल (trap/net/scheme) is masculine → use "का", never "की":
+  WRONG:  "Mr. Big की जाल"   CORRECT: "Mr. Big का जाल"
+• Always check postposition gender agreement: किसी का/की/के, उसका/उसकी/उसके.
+
+PUNCTUATION AND SENTENCE STRUCTURE
+━━━━━━━━━━━━━━━━━━
+• "जिसे", "जिसने", "जहाँ", "जब", "जो" begin DEPENDENT clauses — they cannot follow a
+  full stop (।). Use a comma:
+  WRONG:  "यह एक ख़ास तकनीक थी। जिसे Mr. Big Operation कहते हैं।"
+  CORRECT: "यह एक ख़ास तकनीक थी, जिसे Mr. Big Operation कहा जाता है।"
+• Use danda (।) only at a true complete sentence boundary.
+
+AWKWARD PHRASING — KNOWN PITFALLS
+━━━━━━━━━━━━━━━━━━
+• "तीन-साढ़े-तीन साल बाद" → "लगभग साढ़े तीन साल बाद"
+• "बाल-हत्या" → "बच्चे की हत्या" (in narration; legal documents may differ)
+• "ग़ैरक़ानूनी अभिरक्षा" (for unlawful human confinement) → "ग़ैरक़ानूनी क़ैद"
+  or "ग़ैरक़ानूनी रूप से रोककर रखना"
+• Avoid repeating "यह सिर्फ़..." more than twice. Vary sentence starters.
+
+HINGLISH CONSISTENCY — LEVEL 2 SPECIFIC
+━━━━━━━━━━━━━━━━━━
+• Country adjectives at Level 2: "कनाडाई" not "Canadian"; "कनाडा के" not "Canada के"
+  Exception: official proper names containing "Canada" stay in Roman script
+  (e.g. "Supreme Court of Canada", "Canada Health Act")
+• Never use English adjectives or common nouns when Hindi equivalents exist.
+
+LEGAL LANGUAGE CLARITY
+━━━━━━━━━━━━━━━━━━
+• Legal Hindi must be accessible to a general Hindi-speaking viewer.
+• Avoid over-Sanskritised or bureaucratic compounds that obscure meaning.
+• Preferred forms: अदालत, सज़ा, दोषसिद्धि, मुक़दमा, गिरफ़्तारी, ज़मानत, अपील
+• If a specific legal term is needed, introduce it simply:
+  "इस मुक़दमे में एक ख़ास जाँच तकनीक — जिसे Mr. Big Operation कहते हैं — का इस्तेमाल हुआ।"
+
+NARRATION FLOW
+━━━━━━━━━━━━━━━━━━
+• No more than 2–3 sentences with the same opener in a chunk.
+• Vary sentence length: mix short punchy sentences with longer ones.
+• Premium documentary tone: grave, clear, precise — not melodramatic, not casual.

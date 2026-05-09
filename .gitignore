@@ -1,0 +1,34 @@
+# Secrets
+.env
+
+# Episode output (can be large; regenerate from pipeline)
+app/storage/
+
+# Local raw inputs used to build payloads
+input/
+
+# macOS metadata
+__MACOSX/
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors
+.idea/
+.vscode/
+*.swp
