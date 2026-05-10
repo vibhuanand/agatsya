@@ -219,3 +219,64 @@ def test_preflight_blocking_field_is_in_output(tmp_path):
     assert "blocking" in result
     assert "severity_counts" in result
     assert "metadata_repair_targets" in result
+
+
+# ── safe_to_voice upgrade bug fix (item 1) ────────────────────────────────────
+
+def test_approved_true_stv_false_scores_passing_stays_false(tmp_path):
+    """approved=true, safe_to_voice=false from OpenAI, all scores >=9
+    → final safe_to_voice must remain False. Python must NOT upgrade it."""
+    response = _full_passing_response()
+    response["approved"] = True
+    response["safe_to_voice"] = False  # OpenAI explicitly says not voice-ready
+    report = _call_gate(response, tmp_path)
+    assert report["safe_to_voice"] is False
+
+
+def test_approved_true_stv_true_scores_passing_stays_true(tmp_path):
+    """approved=true, safe_to_voice=true from OpenAI, all scores >=9
+    → final safe_to_voice=True (the normal passing case)."""
+    response = _full_passing_response()
+    response["approved"] = True
+    response["safe_to_voice"] = True
+    report = _call_gate(response, tmp_path)
+    assert report["approved"] is True
+    assert report["safe_to_voice"] is True
+
+
+def test_score_below_nine_forces_approved_false_and_stv_false(tmp_path):
+    """Any score <9 must produce approved=False and safe_to_voice=False."""
+    response = _full_passing_response()
+    response["hindi_quality_score"] = 8.0
+    response["approved"] = True      # OpenAI says approved — Python must override
+    response["safe_to_voice"] = True
+    report = _call_gate(response, tmp_path)
+    assert report["approved"] is False
+    assert report["safe_to_voice"] is False
+
+
+def test_high_severity_issue_forces_approved_false_and_stv_false(tmp_path):
+    """Any high-severity issue must produce approved=False and safe_to_voice=False."""
+    response = _full_passing_response()
+    response["issues"] = [{"severity": "high", "type": "safety", "description": "problem"}]
+    response["approved"] = True
+    response["safe_to_voice"] = True
+    report = _call_gate(response, tmp_path)
+    assert report["approved"] is False
+    assert report["safe_to_voice"] is False
+
+
+def test_python_never_upgrades_openai_stv_false_to_true(tmp_path):
+    """Regardless of scores, Python must never turn OpenAI safe_to_voice=False into True.
+    This is the canonical regression test for the upgrade bug."""
+    response = _full_passing_response()
+    # Scores all >=9, OpenAI says approved but NOT safe_to_voice
+    for k in _THRESHOLDS:
+        response[k] = 9.5
+    response["approved"] = True
+    response["safe_to_voice"] = False
+    response["issues"] = []
+    report = _call_gate(response, tmp_path)
+    # Python thresholds all pass, but safe_to_voice must stay False
+    assert report["safe_to_voice"] is False
+    assert report["approved"] is True  # approved is not downgraded when only stv=false

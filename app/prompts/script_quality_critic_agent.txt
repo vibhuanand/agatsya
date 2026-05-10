@@ -96,7 +96,7 @@ Any of these present in the script lowers hindi_naturalness automatically.
 • "बाल-हत्या" in narration → prefer "बच्चे की हत्या"
 • "Canada के" or "Canadian" as adjective at hinglish_level 1–2 → prefer "कनाडा के" / "कनाडाई"
 • "यह सिर्फ़" repeated more than twice
-• Case motif mistranslation, e.g. ladybug rendered as "झींगुर" or "तितली", is a high-priority issue.
+• Case motif mistranslation — a motif term rendered with an incorrect Hindi word — is a high-priority issue. Check against case_glossary.motif_constraints for the correct preferred_hindi term.
 • Unsupported legal superlatives such as "पहला मामला", "पहली बार", "पहले कभी नहीं",
   or "क़ानून बदल दिया" are safety/factual issues unless explicitly allowed by case_glossary.
 

@@ -34,8 +34,8 @@ MATRA AND NASALIZATION
 
 GRAMMAR — ERGATIVE CASE AND RELATIVE CLAUSES
 • Past transitive verbs in relative clauses require ने:
-  WRONG:  "जो पड़ोसी Meika को घर पर देखा था"
-  CORRECT: "जिस पड़ोसी ने Meika को घर पर देखा था"
+  WRONG:  "जो पड़ोसी <victim_name> को घर पर देखा था"
+  CORRECT: "जिस पड़ोसी ने <victim_name> को घर पर देखा था"
 • "जिसने", "जिस ... ने" — not "जो" when verb is transitive past
 
 GRAMMAR — GENDER AGREEMENT

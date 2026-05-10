@@ -33,13 +33,25 @@ MANIFEST_VERSION = "2"
 # Maps each pipeline stage to the prompt file it uses.
 # Only stages that are meaningful to guard against prompt edits are listed.
 _STAGE_PROMPT_MAP: dict[str, str] = {
-    "fact_lock":            "fact_lock_agent.txt",
-    "story_blueprint":      "story_blueprint_agent.txt",
-    "retention_blueprint":  "retention_blueprint_agent.txt",
-    "script_outline":       "script_outline_agent.txt",
-    "script_writer":        "narration_chunk_writer_agent.txt",
-    "script_quality":       "script_quality_critic_agent.txt",
-    "openai_final_premium": "openai_final_premium_gate.txt",
+    "fact_lock":                     "fact_lock_agent.txt",
+    "story_blueprint":               "story_blueprint_agent.txt",
+    "retention_blueprint":           "retention_blueprint_agent.txt",
+    "script_outline":                "script_outline_agent.txt",
+    "script_writer":                 "narration_chunk_writer_agent.txt",
+    "script_quality":                "script_quality_critic_agent.txt",
+    "openai_final_premium":          "openai_final_premium_gate.txt",
+    # Reusable gate stages — prompt edits must force re-run
+    "hindi_copyedit":                "hindi_copyedit_gate_agent.txt",
+    "originality_safety":            "originality_safety_gate_agent.txt",
+    "recreated_dialogue":            "recreated_dialogue_quality_gate_agent.txt",
+    "metadata_quality":              "metadata_quality_gate_agent.txt",
+    "retention_quality":             "retention_quality_gate_agent.txt",
+    "openai_premium_hindi_editor":   "openai_premium_hindi_editor_gate.txt",
+    "openai_originality_youtube_risk": "openai_originality_youtube_risk_gate.txt",
+    # Repair stages — tracked in manifest so prompt drift is visible in audit
+    "metadata_repair":               "metadata_repair_agent.txt",
+    "targeted_chunk_repair":         "targeted_chunk_repair_agent.txt",
+    "openai_targeted_chunk_repair":  "openai_targeted_chunk_repair_agent.txt",
 }
 
 

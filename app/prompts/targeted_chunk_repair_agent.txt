@@ -18,7 +18,7 @@ Level 1: Almost pure Hindi. Only unavoidable proper nouns in English/Roman scrip
 Level 2: Mostly Hindi. English only for proper nouns and widely recognised terms.
   Prefer: जाँच, साक्ष्य/सबूत, मुक़दमा, अपील, पैरोल, अभिरक्षा, पीड़िता/मृतका,
           संदिग्ध, आरोपी, अदालत, सज़ा, दोषसिद्धि
-  Allow: Meika Jordan, Spencer Jordan, Calgary, Alberta, Supreme Court of Canada, Mr. Big
+  Allow: verified proper nouns from fact_lock (victim name, family, locations, institutions)
 Level 3: Natural spoken Hinglish OK — avoid at emotional or serious legal moments.
 Level 4–5: Hinglish-heavy acceptable — still respectful, never sensational.
 

@@ -116,8 +116,8 @@ Level 1: Almost pure Hindi. Only unavoidable proper nouns stay in English/Roman 
 
 Level 2: Mostly Hindi. English allowed only for proper nouns and widely recognised terms
   where Hindi feels unnatural to a Hindi-speaking audience.
-  Allowed at Level 2: Meika Jordan, Spencer Jordan, Marie-Eve Magoon, Calgary, Alberta,
-    Canada, Health Link, Mr. Big, Supreme Court of Canada, Crime Beat.
+  Allowed at Level 2: verified proper nouns from fact_lock — victim name, family members,
+    locations, institutions, and case-specific terms listed in case_glossary.preferred_terms.
   Prefer Hindi for: investigation → जाँच, evidence → साक्ष्य / सबूत, trial → मुक़दमा /
     सुनवाई, appeal → अपील, parole → पैरोल, custody → अभिरक्षा, victim → पीड़िता / मृतका,
     suspect → संदिग्ध, accused → आरोपी, court → अदालत, sentence → सज़ा,
@@ -157,8 +157,8 @@ GRAMMAR — RELATIVE CLAUSES
 ━━━━━━━━━━━━━━━━━━
 • When a transitive verb in the past tense appears in a relative clause,
   the subject requires the ergative marker ने. Use "जिसने" or "जिस...ने", not "जो":
-  WRONG:  "जो पड़ोसी Meika को घर पर देखा था"
-  CORRECT: "जिस पड़ोसी ने Meika को घर पर देखा था"
+  WRONG:  "जो पड़ोसी <victim_name> को घर पर देखा था"
+  CORRECT: "जिस पड़ोसी ने <victim_name> को घर पर देखा था"
 
 GRAMMAR — GENDER AGREEMENT
 ━━━━━━━━━━━━━━━━━━

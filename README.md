@@ -243,8 +243,15 @@ you explicitly intend to share a specific episode output.
 
 ### Sharing the repo with reviewers
 
-Use the provided clean export script to create a ZIP that excludes `.env`, storage,
-virtual environments, and git history:
+**Do not manually zip the repo.** Manual zips routinely include `.env`, `.venv/`, `app/storage/`, and `.git/` — any of which can expose secrets or episode data. Use the clean export script instead.
+
+```bash
+# macOS / Linux
+bash scripts/export_clean_zip.sh
+
+# With a custom output name
+bash scripts/export_clean_zip.sh agatsya-review.zip
+```
 
 ```powershell
 # Windows / PowerShell
@@ -254,7 +261,12 @@ virtual environments, and git history:
 .\scripts\export_clean_zip.ps1 -OutputPath "C:\Shared\agatsya-review.zip"
 ```
 
-The script aborts if `.env` would be included. Verify the ZIP is clean before sending.
+Both scripts abort if `.env` would be included. After running, verify the ZIP is clean before sending:
+
+```bash
+unzip -l agatsya-clean.zip | grep -E "\.env|storage/|\.venv/"
+# Must return nothing — any match means abort and re-check exclusion logic
+```
 
 ---
 
@@ -1439,4 +1451,6 @@ curl -X POST http://localhost:8000/api/episodes/package \
 ### `/api/episodes/full` is disabled by default
 
 `POST /api/episodes/full` is guarded by `ENABLE_FULL_PIPELINE=false`. Do not enable it until you have confirmed `safe_to_voice=true` from `/api/episodes/package`. ElevenLabs voice generation is irreversible — there is no way to undo a bad audio run.
+
+> **Before enabling `/api/episodes/full` in production:** The route must call `run_agent_pipeline` internally and enforce `safe_to_voice=True` before passing audio to ElevenLabs. Any ElevenLabs invocation that bypasses the `safe_to_voice` check from `run_agent_pipeline` is a production defect. This check must be implemented and verified before the route is enabled.
 ```

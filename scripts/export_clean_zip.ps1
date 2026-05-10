@@ -58,13 +58,14 @@ $excludeDirs = @(
 
 # Build the exclusion filter for Get-ChildItem
 $files = Get-ChildItem -Path $repoRoot -Recurse -File | Where-Object {
-    $relativePath = $_.FullName.Substring($repoRoot.Length + 1)
+    # Normalize to forward slashes so this works on both Windows and macOS/Linux.
+    $relativePath = $_.FullName.Substring($repoRoot.Length + 1).Replace("\", "/")
     $skip = $false
 
     # Skip excluded directories
     foreach ($dir in $excludeDirs) {
-        $normalized = $dir.Replace("/", "\")
-        if ($relativePath.StartsWith($normalized + "\") -or $relativePath -eq $normalized) {
+        $normalized = $dir.Replace("\", "/")
+        if ($relativePath.StartsWith($normalized + "/") -or $relativePath -eq $normalized) {
             $skip = $true
             break
         }

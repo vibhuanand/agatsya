@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     # OpenAI review policy (applies when quality_mode=premium_final)
     # adaptive  — run one combined OpenAI gate (Hindi Editor only); saves 1 API call
     # always    — run both Hindi Editor + Originality gates (maximum coverage)
-    # disabled  — skip all OpenAI gates (does not block approval but lowers confidence)
+    # disabled  — skip OpenAI gates for debugging only; blocks safe_to_voice and is never voice-ready
     openai_review_policy: str = "adaptive"
 
     # Cost / budget controls
