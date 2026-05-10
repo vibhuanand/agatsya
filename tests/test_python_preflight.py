@@ -254,3 +254,189 @@ def test_jhingur_in_non_ladybug_script_is_not_flagged(tmp_path):
     result = _run(script, glossary, tmp_path)
     assert result["passed"] is True
     assert result["blocking"] is False
+
+
+# ── YouTube safety phrase checks ──────────────────────────────────────────────
+
+def test_sensational_hindi_phrase_blocked(tmp_path):
+    """Hardcoded sensational phrases must be caught regardless of glossary."""
+    script = make_script([make_chunk("001", "यह सबसे खौफनाक मामला था।")])
+    glossary = make_glossary(do_not_use=[])  # phrase NOT in do_not_use
+    result = _run(script, glossary, tmp_path)
+    assert result["blocking"] is True
+    types = [i["type"] for i in result["issues"]]
+    assert "youtube_safety_phrase" in types
+
+
+def test_ruh_kamp_phrase_blocked(tmp_path):
+    """'रूह कांप जाएगी' must always be blocked."""
+    script = make_script([make_chunk("001", "रूह कांप जाएगी यह देखकर।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "youtube_safety_phrase" in types
+
+
+def test_sensational_phrase_in_metadata_blocked(tmp_path):
+    """Sensational phrases in metadata must be caught at metadata level."""
+    metadata = make_metadata()
+    metadata["description"] = (
+        "हिला देने वाला सच — " + metadata["description"]
+    )
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "youtube_safety_phrase" in meta_types
+
+
+def test_unverified_media_claim_blocked(tmp_path):
+    """'caught on camera' is an unverified media claim and must be high severity."""
+    script = make_script([
+        make_chunk("001", "यह पूरा incident caught on camera था।")
+    ])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    assert result["blocking"] is True
+    issues = [i for i in result["issues"] if i["type"] == "unverified_media_claim"]
+    assert issues
+    assert issues[0]["severity"] == "high"
+
+
+def test_unverified_claim_allowed_when_glossary_permits(tmp_path):
+    """When allow_verified_media_claims=True, unverified claim phrases must not be flagged."""
+    script = make_script([
+        make_chunk("001", "यह पूरा incident caught on camera था।")
+    ])
+    glossary = make_glossary()
+    glossary["allow_verified_media_claims"] = True
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "unverified_media_claim" not in types
+
+
+def test_leaked_phrase_blocked(tmp_path):
+    """'leaked' is an unverified media claim and must be caught."""
+    script = make_script([make_chunk("001", "एक leaked video सामने आया।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "unverified_media_claim" in types
+
+
+# ── YouTube metadata protection checks ───────────────────────────────────────
+
+def test_duplicate_tags_flagged(tmp_path):
+    """Duplicate tags must be caught at medium severity."""
+    tags = ["हत्याकांड", "नागपुर", "हत्याकांड", "true crime",  # हत्याकांड repeated
+             "crime", "law", "justice", "DNA", "CCTV", "murder",
+             "verdict", "conviction", "court", "India", "2024"]
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=make_metadata(tags=tags))
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "duplicate_tags" in meta_types
+
+
+def test_unrelated_tag_flagged(tmp_path):
+    """'bollywood' tag on a true crime video is off-topic keyword stuffing."""
+    tags = [
+        "हत्याकांड", "नागपुर", "true crime", "crime", "law", "justice",
+        "DNA", "CCTV", "murder", "verdict", "conviction", "court",
+        "India", "2024", "bollywood",
+    ]
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=make_metadata(tags=tags))
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "unrelated_tags" in meta_types
+
+
+def test_unrelated_tag_allowed_when_glossary_permits(tmp_path):
+    """An unrelated tag explicitly allowed in youtube_metadata_rules must not be flagged."""
+    tags = [
+        "हत्याकांड", "नागपुर", "true crime", "crime", "law", "justice",
+        "DNA", "CCTV", "murder", "verdict", "conviction", "court",
+        "India", "2024", "trending",
+    ]
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=make_metadata(tags=tags))
+    glossary = make_glossary()
+    glossary["youtube_metadata_rules"]["allow_unrelated_tags"] = ["trending"]
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "unrelated_tags" not in meta_types
+
+
+def test_thumbnail_text_one_word_flagged(tmp_path):
+    """Single-word thumbnail text is too short (needs 2–5 words)."""
+    metadata = make_metadata()
+    metadata["thumbnail_options"] = [{"thumbnail_text": "सच", "angle": "theme"}]
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "thumbnail_text_length" in meta_types
+
+
+def test_thumbnail_text_six_words_flagged(tmp_path):
+    """Six-word thumbnail text is too long (max 5 words)."""
+    metadata = make_metadata()
+    metadata["thumbnail_options"] = [
+        {"thumbnail_text": "देविका राठी का असली सच क्या", "angle": "theme"}
+    ]
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "thumbnail_text_length" in meta_types
+
+
+def test_thumbnail_text_three_words_passes(tmp_path):
+    """Three-word thumbnail text (default fixture) must pass."""
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])  # default thumbnail has 3 words
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "thumbnail_text_length" not in meta_types
+
+
+def test_description_too_short_flagged(tmp_path):
+    """A description with fewer than 100 words must produce description_too_short issue."""
+    metadata = make_metadata()
+    metadata["description"] = "बहुत छोटा विवरण।"
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "description_too_short" in meta_types
+
+
+def test_description_100_words_passes(tmp_path):
+    """The default fixture description (100+ words) must not trigger description_too_short."""
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "description_too_short" not in meta_types
+
+
+def test_pinned_comment_missing_flagged(tmp_path):
+    """Absent pinned_comment must produce low-severity pinned_comment_missing issue."""
+    metadata = make_metadata()
+    metadata["pinned_comment"] = ""
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "pinned_comment_missing" in meta_types
+    # low severity — must NOT block
+    assert result["blocking"] is False
+
+
+def test_pinned_comment_present_passes(tmp_path):
+    """Default fixture has pinned_comment='नमन।' — must not flag."""
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "pinned_comment_missing" not in meta_types

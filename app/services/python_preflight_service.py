@@ -27,6 +27,36 @@ _FIRST_CLAIM_PATTERNS = [
     "changed the law",
 ]
 
+# Generic sensational/clickbait Hindi phrases — always blocked regardless of glossary.
+# These violate YouTube's true-crime content guidelines for all cases.
+_SENSATIONAL_HINDI_PHRASES = [
+    "सबसे खौफनाक",
+    "रूह कांप जाएगी",
+    "हिला देने वाला सच",
+    "पूरी सच्चाई पहली बार",
+]
+
+# Unverified media authenticity claims.
+# Blocked unless case_glossary marks allow_verified_media_claims=True.
+# ("first ever" / "never before" are already caught by _FIRST_CLAIM_PATTERNS.)
+_UNVERIFIED_CLAIM_PHRASES = [
+    "real voice",
+    "actual scream",
+    "last words",
+    "caught on camera",
+    "leaked",
+    "never seen before",
+    "law changed forever",
+]
+
+# Tags that signal off-topic keyword stuffing.
+# Blocked unless youtube_metadata_rules.allow_unrelated_tags contains the tag.
+_UNRELATED_TAGS: frozenset[str] = frozenset({"bollywood", "cricket", "trending", "viral"})
+
+_DESCRIPTION_MIN_WORDS = 100
+_THUMBNAIL_TEXT_MIN_WORDS = 2
+_THUMBNAIL_TEXT_MAX_WORDS = 5
+
 
 def _word_count(text: str) -> int:
     return len([w for w in text.split() if w.strip()])
@@ -87,6 +117,11 @@ def run_python_preflight(
     title_max = int(metadata_rules.get("recommended_title_max_chars", 100))
     tags_min = int(metadata_rules.get("tags_min", 15))
     tags_max = int(metadata_rules.get("tags_max", 25))
+
+    allow_verified_media_claims: bool = case_glossary.get("allow_verified_media_claims", False)
+    allow_unrelated_tags: set[str] = {
+        t.lower() for t in metadata_rules.get("allow_unrelated_tags", [])
+    }
 
     issues: list[dict[str, Any]] = []
     chunk_targets: list[dict[str, str]] = []
@@ -164,6 +199,45 @@ def run_python_preflight(
                 _chunk_targets_from_issue(chunk_id, "hinglish_level_mismatch", problem, instruction)
             )
 
+        # Generic sensational/clickbait Hindi phrases (always blocked)
+        for phrase in _SENSATIONAL_HINDI_PHRASES:
+            if phrase in text:
+                problem = f"Sensational phrase '{phrase}' in narration — YouTube policy risk."
+                instruction = (
+                    f"Remove or replace '{phrase}' with factual, dignity-first language."
+                )
+                issues.append({
+                    "severity": "medium",
+                    "type": "youtube_safety_phrase",
+                    "chunk_id": chunk_id,
+                    "problem": problem,
+                })
+                chunk_targets.append(
+                    _chunk_targets_from_issue(chunk_id, "youtube_safety_phrase", problem, instruction)
+                )
+
+        # Unverified media authenticity claims
+        if not allow_verified_media_claims:
+            text_lower = text.lower()
+            for phrase in _UNVERIFIED_CLAIM_PHRASES:
+                if phrase.lower() in text_lower:
+                    problem = f"Unverified media claim '{phrase}' in narration."
+                    instruction = (
+                        f"Remove '{phrase}' unless this is fact-checked and sourced. "
+                        "Set allow_verified_media_claims=True in case_glossary if verified."
+                    )
+                    issues.append({
+                        "severity": "high",
+                        "type": "unverified_media_claim",
+                        "chunk_id": chunk_id,
+                        "problem": problem,
+                    })
+                    chunk_targets.append(
+                        _chunk_targets_from_issue(
+                            chunk_id, "unverified_media_claim", problem, instruction
+                        )
+                    )
+
     # ── Metadata checks ───────────────────────────────────────────────────────
     recommended_title = metadata.get("recommended_title", "")
     if _title_too_long(recommended_title, title_max):
@@ -233,6 +307,113 @@ def run_python_preflight(
         metadata_targets.append(
             _meta_target("tags", "tag_count", problem, instruction)
         )
+
+    # Duplicate tags
+    if tags:
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for tag in tags:
+            tag_lower = tag.lower()
+            if tag_lower in seen:
+                duplicates.append(tag)
+            seen.add(tag_lower)
+        if duplicates:
+            problem = f"Duplicate tags detected: {', '.join(duplicates[:5])}."
+            instruction = "Remove duplicate tags so each tag appears at most once."
+            metadata_issues.append({
+                "severity": "medium",
+                "type": "duplicate_tags",
+                "problem": problem,
+            })
+            metadata_targets.append(_meta_target("tags", "duplicate_tags", problem, instruction))
+
+    # Unrelated tags (keyword stuffing)
+    if tags:
+        bad_tags = [
+            t for t in tags
+            if t.lower() in _UNRELATED_TAGS and t.lower() not in allow_unrelated_tags
+        ]
+        if bad_tags:
+            problem = f"Off-topic tags detected (keyword stuffing): {', '.join(bad_tags)}."
+            instruction = (
+                "Remove tags unrelated to the case. "
+                "Add them to youtube_metadata_rules.allow_unrelated_tags only if genuinely relevant."
+            )
+            metadata_issues.append({
+                "severity": "medium",
+                "type": "unrelated_tags",
+                "problem": problem,
+            })
+            metadata_targets.append(_meta_target("tags", "unrelated_tags", problem, instruction))
+
+    # Thumbnail text word count (2–5 words)
+    for thumb in metadata.get("thumbnail_options", []):
+        thumb_text = thumb.get("thumbnail_text", "")
+        if thumb_text:
+            wc = _word_count(thumb_text)
+            if not (_THUMBNAIL_TEXT_MIN_WORDS <= wc <= _THUMBNAIL_TEXT_MAX_WORDS):
+                problem = (
+                    f"thumbnail_text '{thumb_text}' has {wc} word(s); "
+                    f"expected {_THUMBNAIL_TEXT_MIN_WORDS}–{_THUMBNAIL_TEXT_MAX_WORDS}."
+                )
+                instruction = (
+                    f"Rewrite thumbnail text to {_THUMBNAIL_TEXT_MIN_WORDS}–"
+                    f"{_THUMBNAIL_TEXT_MAX_WORDS} punchy words."
+                )
+                metadata_issues.append({
+                    "severity": "medium",
+                    "type": "thumbnail_text_length",
+                    "problem": problem,
+                })
+                metadata_targets.append(
+                    _meta_target("thumbnail_options", "thumbnail_text_length", problem, instruction)
+                )
+
+    # Description word count
+    description = metadata.get("description", "")
+    if description:
+        desc_wc = _word_count(description)
+        if desc_wc < _DESCRIPTION_MIN_WORDS:
+            problem = (
+                f"description has {desc_wc} word(s); "
+                f"minimum is {_DESCRIPTION_MIN_WORDS} for YouTube SEO."
+            )
+            instruction = (
+                f"Expand description to at least {_DESCRIPTION_MIN_WORDS} words with "
+                "relevant case details, timestamps, and a call-to-action."
+            )
+            metadata_issues.append({
+                "severity": "medium",
+                "type": "description_too_short",
+                "problem": problem,
+            })
+            metadata_targets.append(
+                _meta_target("description", "description_too_short", problem, instruction)
+            )
+
+    # Pinned comment
+    pinned_comment = metadata.get("pinned_comment", "")
+    if not pinned_comment or not pinned_comment.strip():
+        metadata_issues.append({
+            "severity": "low",
+            "type": "pinned_comment_missing",
+            "problem": "pinned_comment is absent or empty.",
+        })
+        # low severity — no repair target needed
+
+    # Sensational/clickbait phrases in metadata text
+    for phrase in _SENSATIONAL_HINDI_PHRASES:
+        if phrase in metadata_text:
+            problem = f"Sensational phrase '{phrase}' in metadata — YouTube policy risk."
+            instruction = f"Remove or rephrase '{phrase}' from all metadata fields."
+            metadata_issues.append({
+                "severity": "medium",
+                "type": "youtube_safety_phrase",
+                "problem": problem,
+            })
+            metadata_targets.append(
+                _meta_target("youtube_metadata", "youtube_safety_phrase", problem, instruction)
+            )
 
     estimated_duration = round(
         sum(_word_count(c.get("text", "")) for c in chunks) / settings.hindi_narration_wpm,

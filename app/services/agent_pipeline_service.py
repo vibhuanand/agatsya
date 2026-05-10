@@ -539,16 +539,9 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     else:
         _tls.reuse_ok = True
 
-    # Save stage manifest (always update after stale check so next run has fresh fingerprint)
-    # prompts_dir enables prompt hash tracking — forces rerun if a prompt file was edited
-    stage_manifest_service.save_manifest(
-        episode_dir=episode_dir,
-        raw_transcript=inp.raw_transcript,
-        cost_mode=inp.cost_mode,
-        hinglish_level=inp.hinglish_level,
-        target_duration_min=inp.target_duration_min,
-        prompts_dir=_PROMPTS_DIR,
-    )
+    # Stage manifest is saved at END of a successful run (see bottom of this function).
+    # Saving here would cause the next run to see a "fresh" manifest even if the pipeline
+    # crashed midway and stage output files are stale or missing.
 
     # ── Stage 1: Clean transcript ─────────────────────────────────────────────
     logger.info("Stage 1 — Transcript Cleaner")
@@ -2233,6 +2226,18 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         )
 
     _write_review_files(episode_dir, inp.cost_mode, script_final)
+
+    # ── Save stage manifest (after all stages complete) ───────────────────────
+    # Saved here so a mid-run crash leaves the previous manifest intact.
+    # The next run will then see inputs_changed()=True and disable reuse.
+    stage_manifest_service.save_manifest(
+        episode_dir=episode_dir,
+        raw_transcript=inp.raw_transcript,
+        cost_mode=inp.cost_mode,
+        hinglish_level=inp.hinglish_level,
+        target_duration_min=inp.target_duration_min,
+        prompts_dir=_PROMPTS_DIR,
+    )
 
     # ── Collect all output files ───────────────────────────────────────────────
     all_files = _collect_pipeline_files(episode_dir)
