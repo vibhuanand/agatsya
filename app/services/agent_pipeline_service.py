@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,8 @@ from app.services.transcript_cleaner_service import clean_transcript
 from app.services.claude_client import build_transcript_research_view
 from app.services.fact_lock_service import run_fact_lock
 from app.services.story_blueprint_service import run_story_blueprint
+from app.services.case_glossary_service import build_case_glossary
+from app.services.python_preflight_service import run_python_preflight
 from app.services.script_writer_service import (
     run_script_writer,
     _extract_full_narration,
@@ -91,6 +94,15 @@ logger = logging.getLogger(__name__)
 
 # Prompts directory — used for prompt hash guards in stage reuse
 _PROMPTS_DIR = Path("app/prompts")
+
+# Per-run reuse flag — set in run_agent_pipeline() based on inputs_changed().
+# Using threading.local so concurrent requests each get their own flag.
+_tls = threading.local()
+
+
+def _run_reuse_allowed() -> bool:
+    """True when stage reuse is permitted for the current pipeline run."""
+    return getattr(_tls, "reuse_ok", True)
 
 
 # ─── Schema validation helpers ────────────────────────────────────────────────
@@ -213,7 +225,7 @@ def _try_load_existing_json(
     is forced to re-run regardless of REUSE_EXISTING_STAGE_OUTPUTS=true.
     This prevents silently reusing stale output after prompt edits.
     """
-    if not settings.reuse_existing_stage_outputs:
+    if not settings.reuse_existing_stage_outputs or not _run_reuse_allowed():
         return None
     # Prompt hash guard
     if episode_dir is not None and prompt_check is not None:
@@ -236,7 +248,7 @@ def _try_load_existing_json(
 
 def _try_load_existing_text(path: Path, stage_name: str) -> str | None:
     """Load a plain-text stage output if reuse is enabled and file exists."""
-    if not settings.reuse_existing_stage_outputs:
+    if not settings.reuse_existing_stage_outputs or not _run_reuse_allowed():
         return None
     if path.exists():
         try:
@@ -503,33 +515,33 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     (input_dir / "source_transcript.txt").write_text(inp.raw_transcript, encoding="utf-8")
     (input_dir / "input_payload.json").write_text(inp.model_dump_json(indent=2), encoding="utf-8")
 
-    # If REUSE_EXISTING_STAGE_OUTPUTS=true, compare current inputs against the PREVIOUS
-    # manifest before overwriting it, so we can warn about stale cached stage outputs.
-    if settings.reuse_existing_stage_outputs and stage_manifest_service.inputs_changed(
-        episode_dir=episode_dir,
-        raw_transcript=inp.raw_transcript,
-        cost_mode=inp.cost_mode,
-        hinglish_level=inp.hinglish_level,
-        target_duration_min=inp.target_duration_min,
-    ):
+    # Check whether inputs changed versus the PREVIOUS manifest (before overwriting it).
+    # If they have, disable stage reuse entirely for this run so stale cached outputs
+    # are never silently returned.
+    _inputs_stale = (
+        settings.reuse_existing_stage_outputs
+        and stage_manifest_service.inputs_changed(
+            episode_dir=episode_dir,
+            raw_transcript=inp.raw_transcript,
+            cost_mode=inp.cost_mode,
+            hinglish_level=inp.hinglish_level,
+            target_duration_min=inp.target_duration_min,
+        )
+    )
+    if _inputs_stale:
+        _tls.reuse_ok = False
         _stale_msg = (
-            "Input or settings changed since last run — REUSE_EXISTING_STAGE_OUTPUTS=true "
-            "may return stale results for stages already on disk. "
-            "Consider setting REUSE_EXISTING_STAGE_OUTPUTS=false for a full re-run."
+            "Input or settings changed since last run — stage reuse disabled for this run. "
+            "All stages will re-execute to avoid returning stale results."
         )
         logger.warning(_stale_msg)
         warnings.append(_stale_msg)
+    else:
+        _tls.reuse_ok = True
 
-    # Save stage manifest (always update after stale check so next run has fresh fingerprint)
-    # prompts_dir enables prompt hash tracking — forces rerun if a prompt file was edited
-    stage_manifest_service.save_manifest(
-        episode_dir=episode_dir,
-        raw_transcript=inp.raw_transcript,
-        cost_mode=inp.cost_mode,
-        hinglish_level=inp.hinglish_level,
-        target_duration_min=inp.target_duration_min,
-        prompts_dir=_PROMPTS_DIR,
-    )
+    # Stage manifest is saved at END of a successful run (see bottom of this function).
+    # Saving here would cause the next run to see a "fresh" manifest even if the pipeline
+    # crashed midway and stage output files are stale or missing.
 
     # ── Stage 1: Clean transcript ─────────────────────────────────────────────
     logger.info("Stage 1 — Transcript Cleaner")
@@ -637,6 +649,19 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     script_dir = episode_dir / "03-script"
     review_dir = episode_dir / "04-review"
 
+    # ── Stage 3.25: Case Glossary (Python, zero model cost) ─────────────────
+    logger.info("Stage 3.25 — Case Glossary (Python)")
+    case_glossary = build_case_glossary(
+        fact_lock=fact_lock,
+        blueprint=blueprint,
+        facts_dir=facts_dir,
+    )
+    logger.info(
+        "Case glossary: %d preferred terms, %d forbidden terms",
+        len(case_glossary.get("preferred_terms", {})),
+        len(case_glossary.get("do_not_use", [])),
+    )
+
     # ── Stage 3.5: Retention Blueprint (premium only, non-fatal) ─────────────
     retention_blueprint: dict = {}
     retention_report: dict = {}   # populated in Stage 9.5 when retention_blueprint is present
@@ -714,6 +739,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             script_dir=script_dir,
             hinglish_level=inp.hinglish_level,
             retention_blueprint=retention_blueprint if retention_blueprint else None,
+            case_glossary=case_glossary,
         )
 
     _validate_script_draft(script_draft, script_dir)
@@ -742,6 +768,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             review_dir=review_dir,
             is_final_review=False,
             hinglish_level=inp.hinglish_level,
+            case_glossary=case_glossary,
         )
 
     _validate_quality_report(quality_report, review_dir)
@@ -754,6 +781,57 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         "Quality review: approved=%s, repair_required=%s | scores: %s",
         approved, repair_required, scores,
     )
+
+    # ── Stage 5.5: Python Preflight (zero model cost) ───────────────────────
+    logger.info("Stage 5.5 — Python Preflight Gate")
+    preflight_report = run_python_preflight(
+        script_draft=script_draft,
+        fact_lock=fact_lock,
+        case_glossary=case_glossary,
+        review_dir=review_dir,
+        target_duration_min=inp.target_duration_min,
+        hinglish_level=inp.hinglish_level,
+    )
+    # Carry preflight blocking + metadata targets forward so Stage 13a can use them.
+    _preflight_blocking = preflight_report.get("blocking", False)
+    _preflight_meta_targets = preflight_report.get("metadata_repair_targets", [])
+
+    if not preflight_report.get("passed", False):
+        pf_targets = preflight_report.get("chunk_repair_targets", [])
+        pf_metadata = preflight_report.get("metadata_issues", [])
+        if pf_targets:
+            existing_targets = quality_report.get("chunk_repair_targets", [])
+            seen = {
+                (t.get("chunk_id", ""), t.get("issue_type", ""), t.get("problem", ""))
+                for t in existing_targets
+            }
+            for target in pf_targets:
+                key = (
+                    target.get("chunk_id", ""),
+                    target.get("issue_type", ""),
+                    target.get("problem", ""),
+                )
+                if key not in seen:
+                    existing_targets.append(target)
+                    seen.add(key)
+            quality_report["chunk_repair_targets"] = existing_targets
+            quality_report["approved"] = False
+            quality_report["repair_required"] = True
+            approved = False
+            repair_required = True
+        if pf_metadata:
+            quality_report.setdefault("youtube_metadata_issues", [])
+            quality_report["youtube_metadata_issues"].extend(
+                i.get("problem", str(i)) for i in pf_metadata
+            )
+        warnings.append(
+            "Python preflight found deterministic issues; repair targets were merged before final gates. "
+            "See 04-review/python_preflight_report.json."
+        )
+        (review_dir / "script_quality_report.json").write_text(
+            json.dumps(quality_report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     # ── Stage 6: Targeted Chunk Repair (one pass max) ─────────────────────────
     repair_has_failures = False   # default: no repair ran, no failures
@@ -811,6 +889,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                     review_dir=review_dir,
                     is_final_review=True,
                     hinglish_level=inp.hinglish_level,
+                    case_glossary=case_glossary,
                 )
                 quality_report = final_quality
 
@@ -1137,11 +1216,41 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             )
             status = "needs_human_review"
 
-        # ── Stage 13a: Metadata Repair (if gate failed) ──────────────────────
+        # ── Stage 13a: Metadata Repair (if gate failed OR preflight blocked) ──
+        # Trigger repair when:
+        #   - Claude's metadata quality gate failed (gate_passed=False), OR
+        #   - Python preflight found blocking metadata issues (preflight.blocking=True
+        #     AND metadata_repair_targets is non-empty).
+        # This ensures Python-detected metadata problems are fixed before the
+        # expensive OpenAI Final Premium Gate is called.
+        _preflight_forces_meta_repair = (
+            _preflight_blocking
+            and bool(_preflight_meta_targets)
+            and metadata_report.get("gate_passed", False)  # gate passed but preflight blocked
+        )
+        if _preflight_forces_meta_repair:
+            # Inject preflight targets as required_fixes so metadata repair agent sees them
+            existing_req = list(metadata_report.get("required_fixes", []))
+            for tgt in _preflight_meta_targets:
+                problem = tgt.get("problem", "")
+                if problem and problem not in existing_req:
+                    existing_req.append(problem)
+            metadata_report["required_fixes"] = existing_req
+            metadata_report["gate_passed"] = False  # force repair
+            logger.info(
+                "Stage 13a — Python preflight blocking metadata issues will trigger metadata repair "
+                "(%d preflight targets injected)", len(_preflight_meta_targets)
+            )
+            warnings.append(
+                "Python preflight found blocking metadata issues — "
+                "metadata repair triggered before OpenAI Final Premium Gate. "
+                "See 04-review/python_preflight_report.json."
+            )
+
         metadata_repair_has_failures = False
         if not metadata_report.get("gate_passed", False):
             meta_required_fixes = metadata_report.get("required_fixes", [])
-            if meta_required_fixes:
+            if meta_required_fixes and not _preflight_forces_meta_repair:
                 warnings.append(
                     "Metadata quality gate FAILED. Required fixes: "
                     + "; ".join(meta_required_fixes[:3])
@@ -1364,8 +1473,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         #                       if passes: skip legacy Stage 14/15; if fails with targets: repair once
         #   policy=always    → run Final Premium Gate + legacy Stage 14 + legacy Stage 15 (all 3)
         #                       all 3 must pass for safe_to_voice=True
-        #   policy=disabled  → skip all OpenAI gates (not blocking)
-        #   quality_mode != premium_final, or openai_review_enabled=false → all skipped
+        #   policy=disabled  → skip OpenAI calls, but output is NOT voice-ready
+        #   quality_mode != premium_final, or openai_review_enabled=false → not voice-ready
 
         _openai_gates_active = (
             settings.openai_review_enabled
@@ -1988,20 +2097,28 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                 else "OPENAI_REVIEW_ENABLED=false"
             )
             logger.info(
-                "OpenAI gates skipped (%s) — not blocking approval", _skip_reason
+                "OpenAI gates skipped (%s) — forcing needs_human_review", _skip_reason
             )
             gate_summary["openai_final_premium"] = {
-                "passed": True, "skipped": True,
-                "reason": f"{_skip_reason} — not blocking approval",
+                "passed": False, "skipped": True,
+                "reason": (
+                    f"{_skip_reason} — Final Premium Gate did not run, "
+                    "so safe_to_voice must remain false"
+                ),
             }
             gate_summary["openai_premium_hindi_editor"] = {
                 "passed": True, "skipped": True,
-                "reason": f"{_skip_reason} — not blocking approval",
+                "reason": f"{_skip_reason} — legacy gate skipped",
             }
             gate_summary["openai_originality_youtube_risk"] = {
                 "passed": True, "skipped": True,
-                "reason": f"{_skip_reason} — not blocking approval",
+                "reason": f"{_skip_reason} — legacy gate skipped",
             }
+            status = "needs_human_review"
+            warnings.append(
+                f"OpenAI Final Premium Gate skipped ({_skip_reason}). "
+                "safe_to_voice=False — do not run ElevenLabs until the final premium gate passes."
+            )
 
         # ── Final gate summary + safe_to_voice ────────────────────────────────
         # all_gates_passed checks every content gate entry currently in gate_summary.
@@ -2109,6 +2226,18 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         )
 
     _write_review_files(episode_dir, inp.cost_mode, script_final)
+
+    # ── Save stage manifest (after all stages complete) ───────────────────────
+    # Saved here so a mid-run crash leaves the previous manifest intact.
+    # The next run will then see inputs_changed()=True and disable reuse.
+    stage_manifest_service.save_manifest(
+        episode_dir=episode_dir,
+        raw_transcript=inp.raw_transcript,
+        cost_mode=inp.cost_mode,
+        hinglish_level=inp.hinglish_level,
+        target_duration_min=inp.target_duration_min,
+        prompts_dir=_PROMPTS_DIR,
+    )
 
     # ── Collect all output files ───────────────────────────────────────────────
     all_files = _collect_pipeline_files(episode_dir)

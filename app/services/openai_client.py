@@ -134,6 +134,10 @@ def call_openai_json(
         effective_model.startswith(prefix)
         for prefix in _MAX_COMPLETION_TOKENS_PREFIXES
     )
+    # GPT-5/GPT-5.5 style Chat Completions models currently reject non-default
+    # temperature values. Omit temperature for those models so the API uses its
+    # default instead of failing the final gate.
+    supports_custom_temperature = not effective_model.startswith("gpt-5")
 
     logger.info(
         "[%s] Calling OpenAI (%s) — system=%d chars user=%d chars token_param=%s",
@@ -146,15 +150,19 @@ def call_openai_json(
 
     try:
         if use_completion_tokens:
-            response = client.chat.completions.create(
-                model=effective_model,
-                max_completion_tokens=max_tokens,
-                temperature=_TEMPERATURE,
-                response_format={"type": "json_object"},
-                messages=[
+            request_kwargs = {
+                "model": effective_model,
+                "max_completion_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": user_content},
                 ],
+            }
+            if supports_custom_temperature:
+                request_kwargs["temperature"] = _TEMPERATURE
+            response = client.chat.completions.create(
+                **request_kwargs
             )
         else:
             response = client.chat.completions.create(
@@ -177,6 +185,11 @@ def call_openai_json(
         err_path = raw_save_path.parent / f"_openai_error_{agent_name}.txt"
         try:
             err_path.write_text(error_text, encoding="utf-8")
+            if agent_name == "openai_final_premium_gate":
+                final_gate_error_path = (
+                    raw_save_path.parent / "_openai_final_premium_error.txt"
+                )
+                final_gate_error_path.write_text(error_text, encoding="utf-8")
         except Exception:
             pass  # best-effort
         logger.error("[%s] OpenAI API error: %s", agent_name, api_exc)

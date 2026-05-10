@@ -229,11 +229,32 @@ def run_targeted_chunk_repair(
     # ── Repair each targeted chunk ────────────────────────────────────────────
     repair_results: list[dict] = []
     repaired_chunks: dict[str, dict] = {}  # chunk_id → repaired chunk
+    valid_chunk_ids = {
+        chunk.get("chunk_id")
+        for chunk in script_draft.get("hindi_narration_chunks", [])
+        if chunk.get("chunk_id")
+    }
 
     for target in chunk_repair_targets:
         chunk_id = target.get("chunk_id", "")
         if not chunk_id:
             logger.warning("Skipping repair target with missing chunk_id: %s", target)
+            continue
+        if chunk_id not in valid_chunk_ids:
+            logger.warning(
+                "Skipping non-narration repair target '%s' — targeted chunk repair only handles narration chunks",
+                chunk_id,
+            )
+            repair_results.append({
+                "chunk_id": chunk_id,
+                "status": "skipped_non_chunk_target",
+                "issue_type": target.get("issue_type", ""),
+                "repair_instruction": target.get("repair_instruction", ""),
+                "note": (
+                    "Not counted as a chunk repair failure. Route metadata/dialogue "
+                    "issues to their dedicated repair gates."
+                ),
+            })
             continue
 
         # Load original chunk now so we can record words_before accurately
@@ -326,11 +347,15 @@ def _promote_and_save(
     total_words = sum(c.get("estimated_words", 0) for c in chunks)
     repaired_count = sum(1 for r in repair_results if r.get("status") == "repaired")
     failed_count = sum(1 for r in repair_results if r.get("status") == "failed_kept_original")
+    skipped_non_chunk_count = sum(
+        1 for r in repair_results if r.get("status") == "skipped_non_chunk_target"
+    )
 
     repair_report = {
         "status": "needs_human_review" if has_failures else "targeted_repair_complete",
         "chunks_repaired": repaired_count,
         "chunks_failed": failed_count,
+        "non_chunk_targets_skipped": skipped_non_chunk_count,
         "has_failures": has_failures,
         "total_words_after_repair": total_words,
         "repair_results": repair_results,

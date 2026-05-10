@@ -183,7 +183,7 @@ OPENAI_REPAIR_MAX_CHUNKS=6
 
 | Var | Default | Effect |
 |---|---|---|
-| `OPENAI_REVIEW_ENABLED` | `true` | Run gates 14–15. Set `false` to skip (marks as skipped, not blocking). |
+| `OPENAI_REVIEW_ENABLED` | `true` | Run OpenAI premium gates. Set `false` only for debugging; skipped OpenAI review keeps `safe_to_voice=false`. |
 | `OPENAI_REPAIR_ENABLED` | `true` | Run OpenAI targeted repair if gates 14–15 fail with chunk targets. |
 | `OPENAI_REPAIR_MAX_CHUNKS` | `6` | If more chunks need repair than this limit, skip repair and set `needs_human_review`. |
 
@@ -220,6 +220,41 @@ The API response includes a `gate_summary` object with one entry per gate plus a
 When no Retention Blueprint was generated (standard mode or blueprint failure), `retention_quality` is `{ "passed": true, "skipped": true, "reason": "..." }` and does not block approval.
 
 > **No automated quality guarantee.** This pipeline significantly reduces risk but cannot guarantee YouTube monetization approval, copyright safety, or zero strikes. Final human review is always recommended before publishing. Claude and GPT reduce the probability of obvious issues — they do not provide legal or contractual guarantees.
+
+---
+
+## Security and Sharing
+
+### Never share your `.env` file
+
+`.env` contains API keys for Anthropic, OpenAI, ElevenLabs, and other services.
+**Never commit it to git. Never zip and send it to a reviewer. Never paste it in Slack or email.**
+
+If `.env` was accidentally shared or zipped, **rotate all API keys immediately:**
+- Anthropic: https://console.anthropic.com/settings/keys
+- OpenAI: https://platform.openai.com/api-keys
+- ElevenLabs: https://elevenlabs.io/settings/api-keys
+
+### Never share `app/storage/` unless intentional
+
+`app/storage/` contains all generated episode files (scripts, audio, metadata).
+These may include sensitive case details. Do not share storage contents unless
+you explicitly intend to share a specific episode output.
+
+### Sharing the repo with reviewers
+
+Use the provided clean export script to create a ZIP that excludes `.env`, storage,
+virtual environments, and git history:
+
+```powershell
+# Windows / PowerShell
+.\scripts\export_clean_zip.ps1
+
+# With a custom output path
+.\scripts\export_clean_zip.ps1 -OutputPath "C:\Shared\agatsya-review.zip"
+```
+
+The script aborts if `.env` would be included. Verify the ZIP is clean before sending.
 
 ---
 
@@ -365,7 +400,7 @@ OPENAI_REVIEW_POLICY=adaptive
 OPENAI_REVIEW_ENABLED=true
 SKIP_FINAL_GATES=false
 REUSE_EXISTING_STAGE_OUTPUTS=false
-MAX_TOTAL_MODEL_CALLS=80
+MAX_TOTAL_MODEL_CALLS=999
 CLAUDE_PROMPT_CACHE_ENABLED=true
 # Required — the Final Premium Gate is an OpenAI call:
 OPENAI_API_KEY=sk-...
@@ -472,10 +507,10 @@ OPENAI_API_KEY=sk-...
 
 **If you want to run without OpenAI review** — use `QUALITY_MODE` or `OPENAI_REVIEW_POLICY`:
 ```bash
-# Reduce to one OpenAI call (Hindi Editor only — default, recommended)
+# Reduce to one combined OpenAI Final Premium Gate call (default, recommended)
 OPENAI_REVIEW_POLICY=adaptive
 
-# Skip all OpenAI gates — does not block approval but lowers confidence
+# Skip all OpenAI gates — debug only, never voice-ready
 OPENAI_REVIEW_POLICY=disabled
 
 # Or skip all OpenAI gates via quality mode (no OpenAI, no voice/video)
@@ -483,7 +518,7 @@ QUALITY_MODE=premium_build   # Claude + Python only, debug mode — NOT voice-re
 QUALITY_MODE=premium_batch   # bulk candidate evaluation — NOT voice-ready
 ```
 
-With `QUALITY_MODE=premium_build` or `premium_batch`, or `OPENAI_REVIEW_POLICY=disabled`, all OpenAI gates are marked `skipped` and do not block `safe_to_voice`. The script must still pass all Claude gates.
+With `QUALITY_MODE=premium_build` or `premium_batch`, or `OPENAI_REVIEW_POLICY=disabled`, OpenAI calls are skipped for debugging/cost control, but the run is **not voice-ready**. The API must return `safe_to_voice=false` until the OpenAI Final Premium Gate has actually passed.
 
 ### ElevenLabs / Pexels / Pixabay not configured
 
@@ -751,6 +786,8 @@ app/storage/episodes/001-meika-jordan/
     _fact_lock_raw_response.txt    ← raw Claude output (debugging)
     story_blueprint.json           ← story type, hook, sections, sensitivity rules
     _story_blueprint_raw_response.txt
+    case_glossary.json             ← deterministic terms, names, legal-claim constraints
+    retention_blueprint.json       ← compact retention plan (premium)
 
   03-script/                       ← agent outputs: Hindi narration
     script_draft.json              ← script as written by Script Writer agent
@@ -769,6 +806,7 @@ app/storage/episodes/001-meika-jordan/
     _script_repair_raw_response.txt  ← (only if repair ran)
 
   04-review/                       ← quality reports
+    python_preflight_report.json   ← zero-cost deterministic checks before final gates
     script_quality_report.json     ← draft review: approved + chunk_repair_targets
     _script_quality_raw_response.txt
     chunk_repair_targets.json      ← (if repair ran) list of chunks to repair
@@ -816,10 +854,11 @@ app/storage/episodes/001-meika-jordan/
 In premium mode, after the Story Blueprint, the pipeline generates a **Retention Blueprint** — a viewer experience arc designed to maximize audience retention, CTR, and subscriber conversion.
 
 **What the Retention Blueprint produces:**
-- `opening_hook_strategy` — exact first 5 seconds, first 30 seconds, central question, viewer promise
-- `retention_curve` — per 2-minute range: tension level, curiosity gap planted, payoff or transition
+- `opening_hook` — concise first hook promise
+- `central_question` — the viewer question that drives the episode
+- `viewer_promise` — what the full episode will answer
+- `retention_beats` — 8–10 compact story beats with curiosity gap, emotional anchor, and payoff
 - `re_engagement_moments` — specific moments (by minute) that re-hook viewers who are drifting
-- `pattern_interrupts` — timeline shifts, audio recreations, court turns, emotional memories
 - `subscriber_conversion_moment` — the natural premium moment where a subscribe invitation fits
 - `ending_strategy` — how the episode resolves the emotional and factual promise of the opening
 - `shorts_candidates` — 2–4 specific moments that work as standalone 40–60 second Shorts clips
@@ -891,7 +930,7 @@ Saves 1 OpenAI API call per episode vs `always` mode. The legacy Hindi Editor an
 
 **`always`** — Combined Final Premium Gate **plus** the legacy Hindi Editor gate and Originality/YouTube Risk gate. All three must pass for `safe_to_voice=true`. Use for maximum coverage before important releases.
 
-**`disabled`** — All OpenAI gates skipped. Does not block `safe_to_voice`, but lowers confidence. Not recommended for production.
+**`disabled`** — All OpenAI gates skipped for debugging/cost control. This blocks `safe_to_voice`; not recommended for production.
 
 ### Configuration
 
@@ -904,7 +943,7 @@ OPENAI_REVIEW_ENABLED=true
 OPENAI_REVIEW_POLICY=adaptive
 ```
 
-If `OPENAI_API_KEY` is not set and `OPENAI_REVIEW_ENABLED=true`, the pipeline returns `status=needs_human_review` and `safe_to_voice=false` without crashing. If `OPENAI_REVIEW_ENABLED=false`, all OpenAI gates are marked `skipped` and do not block script approval (not recommended for production).
+If `OPENAI_API_KEY` is not set and `OPENAI_REVIEW_ENABLED=true`, the pipeline returns `status=needs_human_review` and `safe_to_voice=false` without crashing. If `OPENAI_REVIEW_ENABLED=false`, OpenAI gates are skipped and the output remains `safe_to_voice=false` until the final premium gate is run later.
 
 ### Output files
 
@@ -922,7 +961,7 @@ If `OPENAI_API_KEY` is not set and `OPENAI_REVIEW_ENABLED=true`, the pipeline re
 
 `adaptive` (default) — 1 OpenAI API call per episode.  
 `always` — 3 OpenAI API calls per episode.  
-`disabled` — 0 OpenAI API calls.  
+`disabled` — 0 OpenAI API calls, debug only, never voice-ready.
 All OpenAI calls run only after all Claude gates pass.
 
 > **No automated quality guarantee.** Claude + GPT reduce the probability of obvious issues but cannot guarantee YouTube monetization approval or zero copyright claims. Final human review is recommended before publishing.
@@ -1160,7 +1199,7 @@ The pipeline exposes four knobs to balance cost, speed, and quality coverage.
 |---|---|---|---|
 | `adaptive` | Combined Final Premium Gate (all dimensions in one call) | 1 per episode | Most production runs (default) |
 | `always` | Final Premium Gate + legacy Hindi Editor + legacy Originality/YT Risk | 3 per episode | Maximum coverage, important releases |
-| `disabled` | None | 0 per episode | Budget debugging — lowers confidence, not recommended for production |
+| `disabled` | None; blocks `safe_to_voice` | 0 per episode | Budget debugging only, not production |
 
 In `adaptive` mode, the combined gate checks: Hindi grammar, Hinglish level, retention, originality, YouTube safety, metadata completeness, recreated dialogue, and safe-to-voice — all in a single call.  
 In `always` mode, the combined gate runs first, then two additional independent gates cross-check the same content.  
@@ -1180,9 +1219,9 @@ The pipeline aborts with `BudgetExceededError` if any limit is exceeded:
 
 | Variable | Default | Guards against |
 |---|---|---|
-| `MAX_TOTAL_MODEL_CALLS` | `80` | Runaway cost from looping repair stages |
-| `MAX_REPAIR_CALLS` | `12` | Claude chunk repair calls per episode |
-| `MAX_OPENAI_REPAIR_CALLS` | `6` | OpenAI targeted repair calls per episode |
+| `MAX_TOTAL_MODEL_CALLS` | `999` | Runaway cost from looping repair stages |
+| `MAX_REPAIR_CALLS` | `999` | Claude chunk repair calls per episode |
+| `MAX_OPENAI_REPAIR_CALLS` | `999` | OpenAI targeted repair calls per episode |
 
 If a budget guard fires, the error message names the agent and limit that was exceeded.
 

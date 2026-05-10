@@ -72,7 +72,7 @@ All string values must be 1–2 sentences. No nested arrays beyond what is shown
 }
 
 RULES:
-- retention_beats: 8–12 entries maximum. One per major story section.
+- retention_beats: 8–10 entries maximum. One per major story section.
 - re_engagement_moments: 2–4 entries. Approx minute marks where energy must spike.
 - shorts_candidates: 2–3 entries. Must be specific moments from the case, never generic.
   safety_note must confirm no child suffering, graphic injury, or private family moments.

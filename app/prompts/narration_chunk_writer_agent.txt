@@ -43,6 +43,23 @@ Use ONLY these verified facts. Do not invent names, dates, outcomes, or relation
 {fact_lock_json}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CASE GLOSSARY — MUST FOLLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use this glossary to keep terminology, legal claims, names, and emotional motifs consistent.
+Preferred terms must be used exactly. Do-not-use terms must be avoided unless the fact_lock
+explicitly quotes them as source language.
+
+{case_glossary_json}
+
+LEGAL CLAIM SAFETY:
+• Do not write "पहला मामला", "पहली बार", "पहले कभी नहीं", or "क़ानून बदल दिया" unless
+  case_glossary.legal_claim_rules.allow_first_case_claim is true.
+• If the fact is important but not high-confidence, write:
+  "यह मामला एक महत्वपूर्ण कानूनी मिसाल बना"
+  or "इस मामले ने क़ानूनी विमर्श में अहम जगह बनाई".
+• For child-victim cases, injury language must be restrained and legal/forensic, never visual.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STORY CONTEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Main hook:        {main_hook}

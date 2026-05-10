@@ -106,7 +106,7 @@ def _build_gate_prompt(
         "opening_hook":         retention_blueprint.get("opening_hook", ""),
         "central_question":     retention_blueprint.get("central_question", ""),
         "viewer_promise":       retention_blueprint.get("viewer_promise", ""),
-        "retention_beats":      retention_blueprint.get("retention_beats", [])[:12],
+        "retention_beats":      retention_blueprint.get("retention_beats", [])[:10],
         "re_engagement_moments": retention_blueprint.get("re_engagement_moments", []),
         "ending_strategy":      retention_blueprint.get("ending_strategy", ""),
     }

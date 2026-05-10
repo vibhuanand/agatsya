@@ -147,6 +147,7 @@ def _build_prompt(
     fact_lock: dict,
     blueprint: dict,
     script_draft: dict,
+    case_glossary: dict | None = None,
     hinglish_level: int = 2,
 ) -> str:
     template = _PROMPT_PATH.read_text(encoding="utf-8")
@@ -163,6 +164,7 @@ def _build_prompt(
         "{channel_rules}": get_channel_rules(),
         "{fact_lock_json}": json.dumps(fact_lock, ensure_ascii=False),
         "{story_blueprint_json}": json.dumps(blueprint, ensure_ascii=False),
+        "{case_glossary_json}": json.dumps(case_glossary or {}, ensure_ascii=False),
         "{script_draft_json}": json.dumps(script_draft, ensure_ascii=False),
     }
 
@@ -181,6 +183,7 @@ def run_script_review(
     review_dir: Path,
     is_final_review: bool = False,
     hinglish_level: int = 2,
+    case_glossary: dict | None = None,
 ) -> dict:
     """
     Call the Script Quality Critic Agent, then apply Python-side score validation.
@@ -203,6 +206,7 @@ def run_script_review(
         fact_lock=fact_lock,
         blueprint=blueprint,
         script_draft=script_draft,
+        case_glossary=case_glossary or {},
         hinglish_level=hinglish_level,
     )
 

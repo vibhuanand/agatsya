@@ -73,6 +73,7 @@ def run_script_writer(
     script_dir: Path,
     hinglish_level: int = 2,
     retention_blueprint: dict | None = None,
+    case_glossary: dict | None = None,
 ) -> dict:
     """
     Orchestrate the 5-stage script generation pipeline.
@@ -144,6 +145,7 @@ def run_script_writer(
             fact_lock=fact_lock,
             blueprint=blueprint,
             script_dir=script_dir,
+            case_glossary=case_glossary or {},
             prev_last_sentence=prev_last_sentence,
             next_chunk_purpose=next_purpose,
             hinglish_level=hinglish_level,
@@ -178,6 +180,7 @@ def run_script_writer(
         blueprint=blueprint,
         chunks=written_chunks,
         script_dir=script_dir,
+        case_glossary=case_glossary or {},
         hinglish_level=hinglish_level,
     )
 
