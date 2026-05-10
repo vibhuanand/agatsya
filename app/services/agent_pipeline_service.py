@@ -1545,9 +1545,24 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         high_n, med_n,
                     )
             except Exception as exc:
+                # Exception means the safety gate could not run — treat as blocking.
+                # A script that cannot be safety-checked must not be voice-ready.
                 logger.error("Post-repair Python preflight recheck failed: %s", exc)
+                _post_repair_preflight_blocking = True
+                status = "needs_human_review"
+                gate_summary["python_preflight"] = {
+                    "passed":    False,
+                    "blocking":  True,
+                    "high":      0,
+                    "medium":    0,
+                    "low":       0,
+                    "report":    "python_preflight_report_after_repair.json",
+                    "rechecked": True,
+                    "error":     str(exc),
+                }
                 warnings.append(
-                    f"Post-repair Python preflight recheck failed: {exc}. "
+                    f"Post-repair Python preflight recheck raised an exception: {exc}. "
+                    "Treated as blocking — OpenAI Final Premium Gate skipped. "
                     "Manual review required."
                 )
 
@@ -1792,11 +1807,23 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                 _po_counts.get("medium", 0),
                                             )
                                     except Exception as exc:
+                                        # Exception means the safety gate could not run.
+                                        # Treat as blocking — must not call OFP recheck.
                                         logger.error(
                                             "Python preflight after OAI repair failed: %s", exc
                                         )
+                                        _post_oai_pf_blocking = True
+                                        status = "needs_human_review"
+                                        gate_summary["python_preflight"].update({
+                                            "passed":    False,
+                                            "blocking":  True,
+                                            "report":    "python_preflight_report_after_openai_repair.json",
+                                            "rechecked": True,
+                                            "error":     str(exc),
+                                        })
                                         warnings.append(
-                                            f"Python preflight after OpenAI repair failed: {exc}. "
+                                            f"Python preflight after OpenAI repair raised an exception: {exc}. "
+                                            "Treated as blocking — OFP recheck skipped. "
                                             "Manual review required."
                                         )
 
@@ -2253,12 +2280,23 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                 _poa_counts.get("medium", 0),
                                             )
                                     except Exception as exc:
+                                        # Exception means the safety gate could not run.
+                                        # Treat as blocking — a script that cannot be
+                                        # safety-checked must not be voice-ready.
                                         logger.error(
                                             "Python preflight after OAI repair failed: %s", exc
                                         )
+                                        status = "needs_human_review"
+                                        gate_summary["python_preflight"].update({
+                                            "passed":    False,
+                                            "blocking":  True,
+                                            "report":    "python_preflight_report_after_openai_repair.json",
+                                            "rechecked": True,
+                                            "error":     str(exc),
+                                        })
                                         warnings.append(
-                                            f"Python preflight after OpenAI repair failed: {exc}. "
-                                            "Manual review required."
+                                            f"Python preflight after OpenAI repair raised an exception: {exc}. "
+                                            "Treated as blocking — manual review required."
                                         )
 
                                 except Exception as exc:

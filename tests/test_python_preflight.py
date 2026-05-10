@@ -675,3 +675,94 @@ def test_hindi_unverified_claim_cctv_mein_qaid_detected(tmp_path):
     result = _run(script, glossary, tmp_path)
     types = [i["type"] for i in result["issues"]]
     assert "unverified_media_claim" in types
+
+
+# ── Metadata unverified media claim checks (item 2) ──────────────────────────
+
+def test_metadata_asli_cheekh_creates_repair_target(tmp_path):
+    """'असली चीख' in metadata description must create metadata_repair_targets (high)."""
+    metadata = make_metadata()
+    metadata["description"] = metadata["description"] + " यहाँ असली चीख सुनिए।"
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "unverified_media_claim_metadata" in meta_types
+    repair_types = [t["issue_type"] for t in result["metadata_repair_targets"]]
+    assert "unverified_media_claim_metadata" in repair_types
+    # Must be high severity
+    high = [i for i in result["metadata_issues"]
+            if i["type"] == "unverified_media_claim_metadata"]
+    assert all(i["severity"] == "high" for i in high)
+
+
+def test_metadata_leek_video_creates_repair_target(tmp_path):
+    """'लीक वीडियो' in metadata description must create metadata_repair_targets (high)."""
+    metadata = make_metadata()
+    metadata["description"] = metadata["description"] + " लीक वीडियो देखिए।"
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "unverified_media_claim_metadata" in meta_types
+    repair_types = [t["issue_type"] for t in result["metadata_repair_targets"]]
+    assert "unverified_media_claim_metadata" in repair_types
+
+
+def test_metadata_caught_on_camera_creates_repair_target(tmp_path):
+    """'caught on camera' in metadata title must create metadata_repair_targets (high)."""
+    metadata = make_metadata()
+    metadata["recommended_title"] = "caught on camera — truth revealed"
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "unverified_media_claim_metadata" in meta_types
+    repair_types = [t["issue_type"] for t in result["metadata_repair_targets"]]
+    assert "unverified_media_claim_metadata" in repair_types
+
+
+def test_metadata_unverified_claim_allowed_when_flag_set(tmp_path):
+    """When allow_verified_media_claims=True, metadata unverified claim phrases are allowed."""
+    metadata = make_metadata()
+    metadata["description"] = metadata["description"] + " असली आवाज़ सुनिए।"
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    # allow_verified_media_claims=True at glossary level
+    glossary = make_glossary(do_not_use=[])
+    glossary["allow_verified_media_claims"] = True
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "unverified_media_claim_metadata" not in meta_types
+
+
+def test_metadata_leaked_footage_english_creates_repair_target(tmp_path):
+    """'leaked footage' in metadata must create metadata_repair_targets (high)."""
+    metadata = make_metadata()
+    metadata["description"] = metadata["description"] + " leaked footage from the scene."
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "unverified_media_claim_metadata" in meta_types
+
+
+def test_metadata_last_words_creates_high_severity_issue(tmp_path):
+    """'last words' in metadata creates a high-severity metadata_issue."""
+    metadata = make_metadata()
+    metadata["description"] = metadata["description"] + " Her last words are revealed."
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    high = [i for i in result["metadata_issues"]
+            if i["type"] == "unverified_media_claim_metadata" and i["severity"] == "high"]
+    assert len(high) >= 1
+
+
+def test_metadata_unverified_claim_blocks_preflight(tmp_path):
+    """High-severity metadata unverified claim must make preflight blocking=True."""
+    metadata = make_metadata()
+    metadata["description"] = metadata["description"] + " कैमरे में कैद सच।"
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    assert result["blocking"] is True

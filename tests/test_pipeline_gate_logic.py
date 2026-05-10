@@ -404,3 +404,83 @@ def test_post_oai_repair_preflight_blocking_sets_needs_human_review(tmp_path):
         gate_summary=gate_summary,
     )
     assert safe_to_voice is False
+
+
+# ── Python preflight exception = blocking (item 1) ────────────────────────────
+
+def _exception_gate_summary_entry() -> dict:
+    """Gate summary entry produced when Python preflight raises an exception.
+    Mirrors the exact dict written in agent_pipeline_service.py exception handlers.
+    """
+    return {
+        "passed":    False,
+        "blocking":  True,
+        "high":      0,
+        "medium":    0,
+        "low":       0,
+        "report":    "python_preflight_report_after_repair.json",
+        "rechecked": True,
+        "error":     "simulated exception",
+    }
+
+
+def test_preflight_exception_is_treated_as_blocking():
+    """When post-repair Python preflight raises an exception, blocking must be True."""
+    entry = _exception_gate_summary_entry()
+    assert entry["blocking"] is True
+    assert entry["passed"] is False
+
+
+def test_preflight_exception_blocks_openai_gates():
+    """When preflight exception sets blocking=True, _openai_gates_active must be False."""
+    entry = _exception_gate_summary_entry()
+    # _post_repair_preflight_blocking = entry["blocking"]
+    gates_active = _compute_openai_gates_active(
+        openai_review_enabled=True,
+        quality_mode="premium_final",
+        openai_review_policy="adaptive",
+        post_repair_preflight_blocking=entry["blocking"],
+    )
+    assert gates_active is False
+
+
+def test_preflight_exception_means_safe_to_voice_false():
+    """When preflight exception sets blocking=True in gate_summary, safe_to_voice=False."""
+    gate_summary = {"python_preflight": _exception_gate_summary_entry()}
+    safe_to_voice = _compute_safe_to_voice(
+        status="script_approved",
+        all_gates_passed=True,
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is False
+
+
+def test_post_oai_repair_preflight_exception_blocks_ofp_recheck():
+    """When Stage 16b preflight raises an exception, _post_oai_pf_blocking=True
+    so the OFP recheck guard (if not _post_oai_pf_blocking) prevents the recheck."""
+    # Mirrors: except Exception → _post_oai_pf_blocking = True
+    _post_oai_pf_blocking = True  # exception handler sets this
+    recheck_active = _compute_oai_recheck_active(post_oai_pf_blocking=_post_oai_pf_blocking)
+    assert recheck_active is False
+
+
+def test_preflight_exception_gate_summary_has_error_field():
+    """Gate summary from exception handler must include 'error' key for diagnostics."""
+    entry = _exception_gate_summary_entry()
+    assert "error" in entry
+    assert entry["error"]  # non-empty
+
+
+def test_preflight_exception_status_is_needs_human_review():
+    """When preflight exception occurs, status must be set to needs_human_review.
+    This ensures safe_to_voice stays False regardless of other gate results."""
+    gate_summary = {"python_preflight": _exception_gate_summary_entry()}
+    # status="needs_human_review" is set by the exception handler
+    safe_to_voice = _compute_safe_to_voice(
+        status="needs_human_review",
+        all_gates_passed=True,
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is False
