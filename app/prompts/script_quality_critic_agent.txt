@@ -23,6 +23,9 @@ FACT LOCK (source of truth):
 STORY BLUEPRINT (narrative plan):
 {story_blueprint_json}
 
+CASE GLOSSARY (mandatory terminology and legal-claim constraints):
+{case_glossary_json}
+
 SCRIPT DRAFT (to review):
 {script_draft_json}
 
@@ -93,6 +96,9 @@ Any of these present in the script lowers hindi_naturalness automatically.
 • "बाल-हत्या" in narration → prefer "बच्चे की हत्या"
 • "Canada के" or "Canadian" as adjective at hinglish_level 1–2 → prefer "कनाडा के" / "कनाडाई"
 • "यह सिर्फ़" repeated more than twice
+• Case motif mistranslation, e.g. ladybug rendered as "झींगुर" or "तितली", is a high-priority issue.
+• Unsupported legal superlatives such as "पहला मामला", "पहली बार", "पहले कभी नहीं",
+  or "क़ानून बदल दिया" are safety/factual issues unless explicitly allowed by case_glossary.
 
 Add each violation found as a chunk_repair_target with issue_type="hindi_naturalness".
 
@@ -170,6 +176,9 @@ issue_type values:
   duration                — chunk is significantly over/under its target word count
 
 Only list chunks that genuinely need repair. Do not list chunks that pass all checks.
+Do not put metadata, title, tags, thumbnail, or description issues into chunk_repair_targets.
+Report those under youtube_metadata_issues and repair_instructions instead.
+If many chunks have similar style issues, choose the 3–6 highest-impact chunks only.
 
 MANDATORY: If hindi_naturalness score is below 8, you MUST include chunk_repair_targets for the
 3–6 weakest chunks for naturalness. Do not leave chunk_repair_targets empty when hindi_naturalness

@@ -292,6 +292,11 @@ class YoutubeMetadataMinimal(BaseModel):
     title_options: List[str] = []
     recommended_title: str
     description: str = ""
+    tags: List[str] = []
+    thumbnail_options: List[Any] = []
+    chapters: List[Any] = []
+    shorts_plan: List[Any] = []
+    pinned_comment: str = ""
 
 
 # ─── Story Blueprint schema ───────────────────────────────────────────────────

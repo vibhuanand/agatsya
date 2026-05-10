@@ -46,6 +46,8 @@ from app.services.transcript_cleaner_service import clean_transcript
 from app.services.claude_client import build_transcript_research_view
 from app.services.fact_lock_service import run_fact_lock
 from app.services.story_blueprint_service import run_story_blueprint
+from app.services.case_glossary_service import build_case_glossary
+from app.services.python_preflight_service import run_python_preflight
 from app.services.script_writer_service import (
     run_script_writer,
     _extract_full_narration,
@@ -637,6 +639,19 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     script_dir = episode_dir / "03-script"
     review_dir = episode_dir / "04-review"
 
+    # ── Stage 3.25: Case Glossary (Python, zero model cost) ─────────────────
+    logger.info("Stage 3.25 — Case Glossary (Python)")
+    case_glossary = build_case_glossary(
+        fact_lock=fact_lock,
+        blueprint=blueprint,
+        facts_dir=facts_dir,
+    )
+    logger.info(
+        "Case glossary: %d preferred terms, %d forbidden terms",
+        len(case_glossary.get("preferred_terms", {})),
+        len(case_glossary.get("do_not_use", [])),
+    )
+
     # ── Stage 3.5: Retention Blueprint (premium only, non-fatal) ─────────────
     retention_blueprint: dict = {}
     retention_report: dict = {}   # populated in Stage 9.5 when retention_blueprint is present
@@ -714,6 +729,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             script_dir=script_dir,
             hinglish_level=inp.hinglish_level,
             retention_blueprint=retention_blueprint if retention_blueprint else None,
+            case_glossary=case_glossary,
         )
 
     _validate_script_draft(script_draft, script_dir)
@@ -742,6 +758,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             review_dir=review_dir,
             is_final_review=False,
             hinglish_level=inp.hinglish_level,
+            case_glossary=case_glossary,
         )
 
     _validate_quality_report(quality_report, review_dir)
@@ -754,6 +771,53 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         "Quality review: approved=%s, repair_required=%s | scores: %s",
         approved, repair_required, scores,
     )
+
+    # ── Stage 5.5: Python Preflight (zero model cost) ───────────────────────
+    logger.info("Stage 5.5 — Python Preflight Gate")
+    preflight_report = run_python_preflight(
+        script_draft=script_draft,
+        fact_lock=fact_lock,
+        case_glossary=case_glossary,
+        review_dir=review_dir,
+        target_duration_min=inp.target_duration_min,
+        hinglish_level=inp.hinglish_level,
+    )
+    if not preflight_report.get("passed", False):
+        pf_targets = preflight_report.get("chunk_repair_targets", [])
+        pf_metadata = preflight_report.get("metadata_issues", [])
+        if pf_targets:
+            existing_targets = quality_report.get("chunk_repair_targets", [])
+            seen = {
+                (t.get("chunk_id", ""), t.get("issue_type", ""), t.get("problem", ""))
+                for t in existing_targets
+            }
+            for target in pf_targets:
+                key = (
+                    target.get("chunk_id", ""),
+                    target.get("issue_type", ""),
+                    target.get("problem", ""),
+                )
+                if key not in seen:
+                    existing_targets.append(target)
+                    seen.add(key)
+            quality_report["chunk_repair_targets"] = existing_targets
+            quality_report["approved"] = False
+            quality_report["repair_required"] = True
+            approved = False
+            repair_required = True
+        if pf_metadata:
+            quality_report.setdefault("youtube_metadata_issues", [])
+            quality_report["youtube_metadata_issues"].extend(
+                i.get("problem", str(i)) for i in pf_metadata
+            )
+        warnings.append(
+            "Python preflight found deterministic issues; repair targets were merged before final gates. "
+            "See 04-review/python_preflight_report.json."
+        )
+        (review_dir / "script_quality_report.json").write_text(
+            json.dumps(quality_report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     # ── Stage 6: Targeted Chunk Repair (one pass max) ─────────────────────────
     repair_has_failures = False   # default: no repair ran, no failures
@@ -811,6 +875,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                     review_dir=review_dir,
                     is_final_review=True,
                     hinglish_level=inp.hinglish_level,
+                    case_glossary=case_glossary,
                 )
                 quality_report = final_quality
 

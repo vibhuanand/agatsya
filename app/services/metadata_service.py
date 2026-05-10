@@ -42,6 +42,7 @@ def _build_prompt(
     fact_lock: dict,
     blueprint: dict,
     chunks: list[dict],
+    case_glossary: dict,
     hinglish_level: int = 2,
 ) -> str:
     template = _PROMPT_PATH.read_text(encoding="utf-8")
@@ -53,6 +54,7 @@ def _build_prompt(
         "{cost_mode}": cost_mode,
         "{hinglish_level}": str(hinglish_level),
         "{fact_lock_json}": json.dumps(fact_lock, ensure_ascii=False),
+        "{case_glossary_json}": json.dumps(case_glossary, ensure_ascii=False),
         "{title_angle}": blueprint.get("title_angle", ""),
         "{main_hook}": blueprint.get("main_hook", ""),
         "{closing_style}": blueprint.get("closing_style", ""),
@@ -72,6 +74,7 @@ def run_metadata(
     blueprint: dict,
     chunks: list[dict],
     script_dir: Path,
+    case_glossary: dict | None = None,
     hinglish_level: int = 2,
 ) -> dict:
     """
@@ -86,6 +89,7 @@ def run_metadata(
         fact_lock=fact_lock,
         blueprint=blueprint,
         chunks=chunks,
+        case_glossary=case_glossary or {},
         hinglish_level=hinglish_level,
     )
 

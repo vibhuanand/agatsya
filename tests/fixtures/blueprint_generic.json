@@ -1,0 +1,17 @@
+{
+  "primary_story_type": "murder_conviction",
+  "sensitivity_level": "medium",
+  "narrative_sections": [
+    {"section": "Opening Hook", "purpose": "Establish stakes"},
+    {"section": "The Crime", "purpose": "Present facts"},
+    {"section": "Investigation", "purpose": "Show police work"},
+    {"section": "Trial", "purpose": "Legal outcome"},
+    {"section": "Verdict", "purpose": "Justice delivered"}
+  ],
+  "main_hook": "A young woman found dead in her apartment. Who did it?",
+  "emotional_anchor": "Devika's family fighting for justice",
+  "sensitivity_rules": {
+    "child_victim": false,
+    "graphic_details": "minimize"
+  }
+}

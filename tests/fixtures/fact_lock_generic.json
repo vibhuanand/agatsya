@@ -1,0 +1,25 @@
+{
+  "case_name": "Devika Rathi Murder Case",
+  "verified_people": [
+    {"name": "Devika Rathi", "role": "victim"},
+    {"name": "Prakash Soni", "role": "accused / convicted"},
+    {"name": "Justice Arvind Nair", "role": "judge"}
+  ],
+  "verified_dates": [
+    {"date": "2021-06-10", "event": "Devika Rathi found dead in her apartment", "confidence": "high"}
+  ],
+  "verified_timeline": [
+    {"event": "Prakash Soni arrested", "date": "2021-06-13", "confidence": "high", "source_phrase": "Police made the arrest three days after the discovery"},
+    {"event": "Trial commenced", "date": "2022-01-15", "confidence": "high", "source_phrase": ""}
+  ],
+  "legal_outcome": {
+    "verdict": "convicted",
+    "charge": "murder",
+    "sentence": "life imprisonment",
+    "court": "Nagpur Sessions Court",
+    "confidence": "high"
+  },
+  "facts_to_verify_externally": [],
+  "key_evidence_or_turning_points": ["CCTV footage from building lobby", "DNA match on weapon"],
+  "emotional_details": ["Devika was 28 years old", "Devika's family campaigned for justice"]
+}

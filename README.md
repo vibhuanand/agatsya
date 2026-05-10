@@ -751,6 +751,8 @@ app/storage/episodes/001-meika-jordan/
     _fact_lock_raw_response.txt    ← raw Claude output (debugging)
     story_blueprint.json           ← story type, hook, sections, sensitivity rules
     _story_blueprint_raw_response.txt
+    case_glossary.json             ← deterministic terms, names, legal-claim constraints
+    retention_blueprint.json       ← compact retention plan (premium)
 
   03-script/                       ← agent outputs: Hindi narration
     script_draft.json              ← script as written by Script Writer agent
@@ -769,6 +771,7 @@ app/storage/episodes/001-meika-jordan/
     _script_repair_raw_response.txt  ← (only if repair ran)
 
   04-review/                       ← quality reports
+    python_preflight_report.json   ← zero-cost deterministic checks before final gates
     script_quality_report.json     ← draft review: approved + chunk_repair_targets
     _script_quality_raw_response.txt
     chunk_repair_targets.json      ← (if repair ran) list of chunks to repair
@@ -816,10 +819,11 @@ app/storage/episodes/001-meika-jordan/
 In premium mode, after the Story Blueprint, the pipeline generates a **Retention Blueprint** — a viewer experience arc designed to maximize audience retention, CTR, and subscriber conversion.
 
 **What the Retention Blueprint produces:**
-- `opening_hook_strategy` — exact first 5 seconds, first 30 seconds, central question, viewer promise
-- `retention_curve` — per 2-minute range: tension level, curiosity gap planted, payoff or transition
+- `opening_hook` — concise first hook promise
+- `central_question` — the viewer question that drives the episode
+- `viewer_promise` — what the full episode will answer
+- `retention_beats` — 8–10 compact story beats with curiosity gap, emotional anchor, and payoff
 - `re_engagement_moments` — specific moments (by minute) that re-hook viewers who are drifting
-- `pattern_interrupts` — timeline shifts, audio recreations, court turns, emotional memories
 - `subscriber_conversion_moment` — the natural premium moment where a subscribe invitation fits
 - `ending_strategy` — how the episode resolves the emotional and factual promise of the opening
 - `shorts_candidates` — 2–4 specific moments that work as standalone 40–60 second Shorts clips
