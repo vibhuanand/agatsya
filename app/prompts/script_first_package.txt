@@ -82,7 +82,7 @@ Write chunks in this order:
 002_victim_intro — 90-120 seconds (~180-240 words)
   Who was this person? What was their life like?
   Include specific, human details from the transcript: personality, habits, memorable things.
-  Example depth expected: if the transcript mentions ladybugs, include that detail.
+  Example depth expected: if the transcript mentions a distinctive detail (a motif, habit, or personal object), include that detail.
   Dignity first. Never exploitative.
 
 003_first_question — 60-90 seconds (~120-180 words)

@@ -42,8 +42,8 @@ PREMIUM HINDI GRAMMAR — MANDATORY
 6. Gender agreement: जाल = masculine (Mr. Big का जाल, NOT Mr. Big की जाल).
    Check all postpositions: का/की/के, उसका/उसकी/उसके.
 7. Relative clauses: transitive past verbs require ने.
-   WRONG: "जो पड़ोसी Meika को घर पर देखा था"
-   CORRECT: "जिस पड़ोसी ने Meika को घर पर देखा था"
+   WRONG: "जो पड़ोसी <victim_name> को घर पर देखा था"
+   CORRECT: "जिस पड़ोसी ने <victim_name> को घर पर देखा था"
 8. No sentence fragments: dependent clause markers (जिसे, जहाँ, जब, जो, जैसे) CANNOT
    follow a danda/full stop (।).
    WRONG: "यह एक तकनीक थी। जिसे Mr. Big Operation कहते हैं।"

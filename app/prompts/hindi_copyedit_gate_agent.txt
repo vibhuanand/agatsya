@@ -40,8 +40,8 @@ ORTHOGRAPHY / MATRA / NASALIZATION
 GRAMMAR
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Relative clauses with transitive verbs in past tense:
-  WRONG:  "जो पड़ोसी Meika को घर पर देखा था"
-  CORRECT: "जिस पड़ोसी ने Meika को घर पर देखा था"
+  WRONG:  "जो पड़ोसी <victim_name> को घर पर देखा था"
+  CORRECT: "जिस पड़ोसी ने <victim_name> को घर पर देखा था"
   Rule: When the relative clause verb is transitive and past (e.g. देखा, सुना, बताया), use "जिसने" or "जिस...ने"
 
 • जाल (trap/net) is masculine — use "का", never "की":

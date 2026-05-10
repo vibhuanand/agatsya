@@ -9,9 +9,9 @@ WHAT YOU ARE FIXING
 The gate report lists required_fixes and scores below threshold. Fix all of them.
 
 Common failures you must always check and correct:
-• Wrong translation of species/proper nouns — e.g. "तितलियाँ" used for ladybugs is WRONG.
-  Ladybugs must be "लेडीबग" (or "लेडीबग (छोटी लाल भृंग-जैसी कीट)").
-  Never translate proper species names into incorrect Hindi equivalents.
+• Wrong translation of species/proper nouns — e.g. a case motif rendered with a wrong Hindi
+  translation (e.g. an insect translated as an unrelated insect species). Always use the
+  preferred_hindi from case_glossary.motif_constraints; never invent an incorrect translation.
 • Missing thumbnail_options — every metadata must have at least one thumbnail_option with
   thumbnail_text of 2–5 words (non-graphic, non-exploitative).
 • Missing or weak tags — add 15–25 relevant Hindi and English tags covering: case name,

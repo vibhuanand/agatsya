@@ -94,8 +94,8 @@ MATRA / NASALIZATION
 
 GRAMMAR — RELATIVE CLAUSES
 • Past transitive relative clauses: use "जिसने" or "जिस ... ने", not "जो":
-  WRONG:  "जो पड़ोसी Meika को घर पर देखा था"
-  CORRECT: "जिस पड़ोसी ने Meika को घर पर देखा था"
+  WRONG:  "जो पड़ोसी <victim_name> को घर पर देखा था"
+  CORRECT: "जिस पड़ोसी ने <victim_name> को घर पर देखा था"
 
 GRAMMAR — GENDER AGREEMENT
 • "जाल" (trap/scheme) is masculine → "का जाल" not "की जाल".

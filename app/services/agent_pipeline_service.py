@@ -795,6 +795,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     # Carry preflight blocking + metadata targets forward so Stage 13a can use them.
     _preflight_blocking = preflight_report.get("blocking", False)
     _preflight_meta_targets = preflight_report.get("metadata_repair_targets", [])
+    _ran_any_repair = False  # set True when chunk OR metadata repair runs
 
     if not preflight_report.get("passed", False):
         pf_targets = preflight_report.get("chunk_repair_targets", [])
@@ -864,6 +865,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                     review_dir=review_dir,
                 )
 
+                _ran_any_repair = True
                 repair_has_failures = repair_report.get("has_failures", False)
                 repair_failed_count = repair_report.get("chunks_failed", 0)
 
@@ -932,6 +934,19 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         "passed": quality_report.get("approved", False),
         "scores": quality_report.get("scores", {}),
         "cost_mode": quality_report.get("cost_mode", inp.cost_mode),
+    }
+
+    # Always record Python preflight result (initial run at Stage 5.5).
+    # Updated below if post-repair recheck runs.
+    _pf_counts = preflight_report.get("severity_counts", {})
+    gate_summary["python_preflight"] = {
+        "passed":    preflight_report.get("passed", False),
+        "blocking":  preflight_report.get("blocking", False),
+        "high":      _pf_counts.get("high", 0),
+        "medium":    _pf_counts.get("medium", 0),
+        "low":       _pf_counts.get("low", 0),
+        "report":    "python_preflight_report.json",
+        "rechecked": False,
     }
 
     if inp.cost_mode == "premium" and settings.skip_final_gates:
@@ -1266,6 +1281,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                     script_dir=script_dir,
                     review_dir=review_dir,
                 )
+                _ran_any_repair = True
 
                 # ── Stage 13b: Recheck Metadata Gate ─────────────────────────
                 logger.info("Stage 13b — Recheck Metadata Quality Gate (post-repair)")
@@ -1476,10 +1492,63 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         #   policy=disabled  → skip OpenAI calls, but output is NOT voice-ready
         #   quality_mode != premium_final, or openai_review_enabled=false → not voice-ready
 
+        # ── Stage 13c: Post-repair Python Preflight recheck ──────────────────
+        # Runs only when chunk repair OR metadata repair has executed.
+        # If still blocking → skip OpenAI Final Premium Gate entirely.
+        _post_repair_preflight_blocking = False
+        if _ran_any_repair:
+            logger.info(
+                "Stage 13c — Post-repair Python Preflight recheck (ran_any_repair=True)"
+            )
+            try:
+                _post_pf_report = run_python_preflight(
+                    script_draft=script_final,
+                    fact_lock=fact_lock,
+                    case_glossary=case_glossary,
+                    review_dir=review_dir,
+                    target_duration_min=inp.target_duration_min,
+                    hinglish_level=inp.hinglish_level,
+                    label="_after_repair",
+                )
+                _post_repair_preflight_blocking = _post_pf_report.get("blocking", False)
+                _post_pf_counts = _post_pf_report.get("severity_counts", {})
+                gate_summary["python_preflight"] = {
+                    "passed":    _post_pf_report.get("passed", False),
+                    "blocking":  _post_repair_preflight_blocking,
+                    "high":      _post_pf_counts.get("high", 0),
+                    "medium":    _post_pf_counts.get("medium", 0),
+                    "low":       _post_pf_counts.get("low", 0),
+                    "report":    "python_preflight_report_after_repair.json",
+                    "rechecked": True,
+                }
+                if _post_repair_preflight_blocking:
+                    status = "needs_human_review"
+                    high_n = _post_pf_counts.get("high", 0)
+                    med_n  = _post_pf_counts.get("medium", 0)
+                    warnings.append(
+                        f"Post-repair Python preflight still BLOCKING "
+                        f"(high={high_n}, medium={med_n}). "
+                        "OpenAI Final Premium Gate skipped. "
+                        "Fix blocking issues manually before re-running. "
+                        "See 04-review/python_preflight_report_after_repair.json."
+                    )
+                    logger.warning(
+                        "Stage 13c — Post-repair preflight BLOCKING "
+                        "(high=%d, medium=%d) — skipping OFP gate.",
+                        high_n, med_n,
+                    )
+            except Exception as exc:
+                logger.error("Post-repair Python preflight recheck failed: %s", exc)
+                warnings.append(
+                    f"Post-repair Python preflight recheck failed: {exc}. "
+                    "Manual review required."
+                )
+
         _openai_gates_active = (
             settings.openai_review_enabled
             and settings.quality_mode == "premium_final"
             and settings.openai_review_policy != "disabled"
+            and not _post_repair_preflight_blocking  # skip OFP if still blocking
         )
 
         if _openai_gates_active:
@@ -2144,7 +2213,13 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             "passed":                       no_repair_failures,
         }
 
-        safe_to_voice = (status == "script_approved") and all_gates_passed and no_repair_failures
+        _pf_gate_ok = not gate_summary.get("python_preflight", {}).get("blocking", True)
+        safe_to_voice = (
+            (status == "script_approved")
+            and all_gates_passed
+            and no_repair_failures
+            and _pf_gate_ok  # python_preflight must not be blocking
+        )
 
         # Stamp safe_to_voice into gate_summary for single-field API inspection
         gate_summary["safe_to_voice"] = safe_to_voice  # type: ignore[assignment]

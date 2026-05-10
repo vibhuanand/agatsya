@@ -36,18 +36,52 @@ _SENSATIONAL_HINDI_PHRASES = [
     "पूरी सच्चाई पहली बार",
 ]
 
-# Unverified media authenticity claims.
+# Unverified media authenticity claims — high severity.
 # Blocked unless case_glossary marks allow_verified_media_claims=True.
 # ("first ever" / "never before" are already caught by _FIRST_CLAIM_PATTERNS.)
 _UNVERIFIED_CLAIM_PHRASES = [
     "real voice",
+    "real audio",
+    "real scream",
     "actual scream",
     "last words",
     "caught on camera",
     "leaked",
+    "leaked footage",
     "never seen before",
     "law changed forever",
 ]
+
+# Generic graphic/gory content — always high severity regardless of glossary.
+# Specific case-level terms belong in case_glossary.do_not_use instead.
+_GRAPHIC_CONTENT_PHRASES = [
+    "dismembered",
+    "body parts scattered",
+    "mutilated body",
+    "torture footage",
+    "graphic violence",
+]
+
+# Sexualized victim framing — always high severity.
+_SEXUALIZED_VICTIM_PHRASES = [
+    "sexual assault details",
+    "rape scene recreation",
+    "sexual abuse recreation",
+    "sexual violence description",
+]
+
+# Child suffering recreation — always high severity.
+_CHILD_HARM_PHRASES = [
+    "child abuse scene",
+    "child suffering recreation",
+    "child pain recreation",
+]
+
+# Shock/clickbait words in thumbnail text — medium severity.
+_THUMBNAIL_SHOCK_WORDS: frozenset[str] = frozenset({
+    "shocking", "brutal", "graphic", "exposed", "leaked",
+    "gruesome", "disturbing", "horror", "explicit", "nsfw",
+})
 
 # Tags that signal off-topic keyword stuffing.
 # Blocked unless youtube_metadata_rules.allow_unrelated_tags contains the tag.
@@ -91,8 +125,12 @@ def run_python_preflight(
     review_dir: Path,
     target_duration_min: int,
     hinglish_level: int,
+    label: str = "",
 ) -> dict[str, Any]:
-    """Run deterministic checks and save 04-review/python_preflight_report.json.
+    """Run deterministic checks and save 04-review/python_preflight_report{label}.json.
+
+    label="" → python_preflight_report.json (initial run)
+    label="_after_repair" → python_preflight_report_after_repair.json (post-repair recheck)
 
     Output shape:
       passed                  bool — True only when no issues at all
@@ -238,6 +276,65 @@ def run_python_preflight(
                         )
                     )
 
+        # Graphic/gory content wording (always high severity — YouTube policy)
+        text_lower_for_graphic = text.lower()
+        for phrase in _GRAPHIC_CONTENT_PHRASES:
+            if phrase.lower() in text_lower_for_graphic:
+                problem = f"Graphic content phrase '{phrase}' in narration — YouTube policy violation."
+                instruction = (
+                    f"Remove or rewrite '{phrase}' using respectful, factual language "
+                    "that does not dwell on graphic physical detail."
+                )
+                issues.append({
+                    "severity": "high",
+                    "type": "graphic_content",
+                    "chunk_id": chunk_id,
+                    "problem": problem,
+                })
+                chunk_targets.append(
+                    _chunk_targets_from_issue(chunk_id, "graphic_content", problem, instruction)
+                )
+
+        # Sexualized victim framing (always high severity)
+        for phrase in _SEXUALIZED_VICTIM_PHRASES:
+            if phrase.lower() in text_lower_for_graphic:
+                problem = f"Sexualized victim framing '{phrase}' in narration."
+                instruction = (
+                    f"Remove '{phrase}'. Report facts without recreating or describing "
+                    "sexual violence in exploitative detail."
+                )
+                issues.append({
+                    "severity": "high",
+                    "type": "sexualized_victim_framing",
+                    "chunk_id": chunk_id,
+                    "problem": problem,
+                })
+                chunk_targets.append(
+                    _chunk_targets_from_issue(
+                        chunk_id, "sexualized_victim_framing", problem, instruction
+                    )
+                )
+
+        # Child harm recreation (always high severity)
+        for phrase in _CHILD_HARM_PHRASES:
+            if phrase.lower() in text_lower_for_graphic:
+                problem = f"Child harm recreation phrase '{phrase}' in narration."
+                instruction = (
+                    f"Remove '{phrase}'. Child suffering must never be recreated or "
+                    "described in graphic detail."
+                )
+                issues.append({
+                    "severity": "high",
+                    "type": "child_harm_content",
+                    "chunk_id": chunk_id,
+                    "problem": problem,
+                })
+                chunk_targets.append(
+                    _chunk_targets_from_issue(
+                        chunk_id, "child_harm_content", problem, instruction
+                    )
+                )
+
     # ── Metadata checks ───────────────────────────────────────────────────────
     recommended_title = metadata.get("recommended_title", "")
     if _title_too_long(recommended_title, title_max):
@@ -346,7 +443,7 @@ def run_python_preflight(
             })
             metadata_targets.append(_meta_target("tags", "unrelated_tags", problem, instruction))
 
-    # Thumbnail text word count (2–5 words)
+    # Thumbnail text word count (2–5 words) and shock/clickbait word detection
     for thumb in metadata.get("thumbnail_options", []):
         thumb_text = thumb.get("thumbnail_text", "")
         if thumb_text:
@@ -368,6 +465,41 @@ def run_python_preflight(
                 metadata_targets.append(
                     _meta_target("thumbnail_options", "thumbnail_text_length", problem, instruction)
                 )
+            # Shock/clickbait word detection in thumbnail
+            thumb_words_lower = {w.lower().strip(".,!?") for w in thumb_text.split()}
+            shock_found = thumb_words_lower & _THUMBNAIL_SHOCK_WORDS
+            if shock_found:
+                problem = (
+                    f"Thumbnail text contains shock/clickbait words: {', '.join(sorted(shock_found))}."
+                )
+                instruction = (
+                    "Remove shock words from thumbnail text. Use factual, dignity-first language."
+                )
+                metadata_issues.append({
+                    "severity": "medium",
+                    "type": "thumbnail_shock_word",
+                    "problem": problem,
+                })
+                metadata_targets.append(
+                    _meta_target("thumbnail_options", "thumbnail_shock_word", problem, instruction)
+                )
+
+    # Graphic content / sexualized framing / child harm in metadata text
+    meta_text_lower = metadata_text.lower()
+    for phrase in _GRAPHIC_CONTENT_PHRASES + _SEXUALIZED_VICTIM_PHRASES + _CHILD_HARM_PHRASES:
+        if phrase.lower() in meta_text_lower:
+            problem = f"Metadata contains graphic/sensitive phrase: '{phrase}'."
+            instruction = (
+                f"Remove or rewrite '{phrase}' in metadata using factual, respectful language."
+            )
+            metadata_issues.append({
+                "severity": "high",
+                "type": "graphic_content_metadata",
+                "problem": problem,
+            })
+            metadata_targets.append(
+                _meta_target("youtube_metadata", "graphic_content_metadata", problem, instruction)
+            )
 
     # Description word count
     description = metadata.get("description", "")
@@ -455,7 +587,8 @@ def run_python_preflight(
     }
 
     review_dir.mkdir(parents=True, exist_ok=True)
-    (review_dir / "python_preflight_report.json").write_text(
+    filename = f"python_preflight_report{label}.json"
+    (review_dir / filename).write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
