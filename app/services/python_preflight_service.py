@@ -1,8 +1,10 @@
 """Python preflight gate for zero-cost script/metadata checks.
 
-Runs before expensive final model gates. It catches deterministic issues that
-Claude/OpenAI should not be paid to rediscover: wrong motif terms, unsupported
-legal superlatives, metadata shape problems, and known Hinglish-level leaks.
+Runs before expensive final model gates. Catches deterministic issues:
+unsupported legal superlatives, forbidden terms from the case glossary,
+forbidden name variants, metadata shape problems, Hinglish-level leaks.
+
+All checks are driven by the case_glossary — no case-specific hardcoding.
 """
 from __future__ import annotations
 
@@ -20,16 +22,9 @@ _FIRST_CLAIM_PATTERNS = [
     "पहले कभी नहीं",
     "कानून बदल दिया",
     "क़ानून बदल दिया",
-]
-
-
-_GRAPHIC_CHILD_TERMS = [
-    "फफोला",
-    "काला या सफेद",
-    "काला या सफ़ेद",
-    "पूरे हाथ",
-    "30 सेकंड",
-    "तीसरे दर्जे की जलन",
+    "first ever",
+    "never before",
+    "changed the law",
 ]
 
 
@@ -50,6 +45,15 @@ def _chunk_targets_from_issue(chunk_id: str, issue_type: str, problem: str, inst
     }
 
 
+def _meta_target(field: str, issue_type: str, problem: str, instruction: str) -> dict:
+    return {
+        "field": field,
+        "issue_type": issue_type,
+        "problem": problem,
+        "repair_instruction": instruction,
+    }
+
+
 def run_python_preflight(
     script_draft: dict[str, Any],
     fact_lock: dict[str, Any],
@@ -58,11 +62,24 @@ def run_python_preflight(
     target_duration_min: int,
     hinglish_level: int,
 ) -> dict[str, Any]:
-    """Run deterministic checks and save 04-review/python_preflight_report.json."""
+    """Run deterministic checks and save 04-review/python_preflight_report.json.
+
+    Output shape:
+      passed                  bool — True only when no issues at all
+      blocking                bool — True when high or medium issues exist
+      issues                  list — per-chunk narration issues
+      chunk_repair_targets    list — structured targets for Claude repair
+      metadata_issues         list — metadata-level issues
+      metadata_repair_targets list — structured targets for metadata repair
+      severity_counts         dict — {high, medium, low} counts across all issues
+      estimated_duration_min  float
+      target_duration_min     int
+      hinglish_level          int
+    """
     chunks = script_draft.get("hindi_narration_chunks", [])
     metadata = script_draft.get("youtube_metadata", {})
-    preferred = case_glossary.get("preferred_terms", {})
-    do_not_use = set(case_glossary.get("do_not_use", []))
+    do_not_use: set[str] = set(case_glossary.get("do_not_use", []))
+    forbidden_name_variants: list[str] = case_glossary.get("forbidden_name_variants", [])
     allow_first_claim = case_glossary.get("legal_claim_rules", {}).get(
         "allow_first_case_claim", False
     )
@@ -74,78 +91,148 @@ def run_python_preflight(
     issues: list[dict[str, Any]] = []
     chunk_targets: list[dict[str, str]] = []
     metadata_issues: list[dict[str, str]] = []
+    metadata_targets: list[dict[str, str]] = []
 
-    # Narration checks
+    # ── Narration chunk checks ────────────────────────────────────────────────
     for chunk in chunks:
         chunk_id = chunk.get("chunk_id", "")
         text = chunk.get("text", "")
 
-        if "झींगुर" in text or "तितल" in text:
-            problem = "Ladybug motif mistranslated as झींगुर/तितली."
-            instruction = "Replace incorrect insect words with लेडीबग consistently."
-            issues.append({"severity": "high", "type": "case_glossary", "chunk_id": chunk_id, "problem": problem})
-            chunk_targets.append(_chunk_targets_from_issue(chunk_id, "hindi_naturalness", problem, instruction))
+        # Forbidden terms from case glossary (generic — derived from case data)
+        for forbidden in do_not_use:
+            if forbidden and forbidden in text:
+                problem = f"Forbidden term '{forbidden}' in narration chunk."
+                instruction = f"Remove or rephrase '{forbidden}' using appropriate language."
+                issues.append({
+                    "severity": "medium",
+                    "type": "case_glossary",
+                    "chunk_id": chunk_id,
+                    "problem": problem,
+                })
+                chunk_targets.append(
+                    _chunk_targets_from_issue(chunk_id, "case_glossary", problem, instruction)
+                )
 
-        if hinglish_level <= 2 and re.search(r"\bmiss\s+कर", text, flags=re.IGNORECASE):
-            problem = "Unnecessary English phrase 'miss कर' at Hinglish level 2."
-            instruction = "Replace 'miss कर' phrasing with 'याद कर' / 'याद आना' while keeping natural Hindi."
-            issues.append({"severity": "medium", "type": "hinglish_level", "chunk_id": chunk_id, "problem": problem})
-            chunk_targets.append(_chunk_targets_from_issue(chunk_id, "hinglish_level_mismatch", problem, instruction))
+        # Forbidden name variants (e.g. wrong alias for a verified person)
+        for variant in forbidden_name_variants:
+            if variant and variant in text:
+                problem = f"Forbidden name variant '{variant}' in narration chunk."
+                instruction = (
+                    f"Replace '{variant}' with the correct verified name from the glossary."
+                )
+                issues.append({
+                    "severity": "high",
+                    "type": "forbidden_name_variant",
+                    "chunk_id": chunk_id,
+                    "problem": problem,
+                })
+                chunk_targets.append(
+                    _chunk_targets_from_issue(chunk_id, "name_variant", problem, instruction)
+                )
 
+        # Unsupported first/never-before legal framing
         if not allow_first_claim and any(p in text for p in _FIRST_CLAIM_PATTERNS):
             problem = "Unsupported first/never-before legal framing."
             instruction = (
                 "Remove definitive first/never-before framing. Use qualified language such as "
                 "'यह मामला एक महत्वपूर्ण कानूनी मिसाल बना'."
             )
-            issues.append({"severity": "high", "type": "unsupported_legal_claim", "chunk_id": chunk_id, "problem": problem})
-            chunk_targets.append(_chunk_targets_from_issue(chunk_id, "safety", problem, instruction))
+            issues.append({
+                "severity": "high",
+                "type": "unsupported_legal_claim",
+                "chunk_id": chunk_id,
+                "problem": problem,
+            })
+            chunk_targets.append(
+                _chunk_targets_from_issue(chunk_id, "safety", problem, instruction)
+            )
 
-        if any(term in text for term in _GRAPHIC_CHILD_TERMS):
-            problem = "Potentially graphic child-harm phrasing."
-            instruction = "Rewrite in restrained legal/forensic language without visual injury detail."
-            issues.append({"severity": "medium", "type": "youtube_safety", "chunk_id": chunk_id, "problem": problem})
-            chunk_targets.append(_chunk_targets_from_issue(chunk_id, "safety", problem, instruction))
+        # Hinglish leakage — only when hinglish_level is low (≤2)
+        if hinglish_level <= 2 and re.search(r"\bmiss\s+कर", text, flags=re.IGNORECASE):
+            problem = "Unnecessary English phrase 'miss कर' at Hinglish level 2."
+            instruction = (
+                "Replace 'miss कर' phrasing with 'याद कर' / 'याद आना' "
+                "while keeping natural Hindi."
+            )
+            issues.append({
+                "severity": "medium",
+                "type": "hinglish_level",
+                "chunk_id": chunk_id,
+                "problem": problem,
+            })
+            chunk_targets.append(
+                _chunk_targets_from_issue(chunk_id, "hinglish_level_mismatch", problem, instruction)
+            )
 
-    # Metadata checks
+    # ── Metadata checks ───────────────────────────────────────────────────────
     recommended_title = metadata.get("recommended_title", "")
     if _title_too_long(recommended_title, title_max):
+        problem = f"recommended_title is {len(recommended_title)} chars; max is {title_max}."
+        instruction = f"Shorten recommended_title to at most {title_max} characters."
         metadata_issues.append({
             "severity": "medium",
             "type": "title_length",
-            "problem": f"recommended_title is {len(recommended_title)} chars; max is {title_max}.",
+            "problem": problem,
         })
+        metadata_targets.append(
+            _meta_target("recommended_title", "title_length", problem, instruction)
+        )
 
     metadata_text = json.dumps(metadata, ensure_ascii=False)
-    if "झींगुर" in metadata_text or "तितल" in metadata_text:
-        metadata_issues.append({
-            "severity": "high",
-            "type": "metadata_motif",
-            "problem": "Metadata uses wrong motif term for ladybug.",
-        })
 
-    if not allow_first_claim and any(p in metadata_text for p in _FIRST_CLAIM_PATTERNS):
-        metadata_issues.append({
-            "severity": "high",
-            "type": "metadata_unsupported_legal_claim",
-            "problem": "Metadata uses unsupported first/never-before legal framing.",
-        })
-
+    # Forbidden terms in metadata
     for forbidden in do_not_use:
         if forbidden and forbidden in metadata_text:
+            problem = f"Metadata contains forbidden term: {forbidden}"
+            instruction = f"Remove '{forbidden}' from all metadata fields."
             metadata_issues.append({
                 "severity": "medium",
                 "type": "metadata_forbidden_term",
-                "problem": f"Metadata contains forbidden term: {forbidden}",
+                "problem": problem,
             })
+            metadata_targets.append(
+                _meta_target("youtube_metadata", "metadata_forbidden_term", problem, instruction)
+            )
+
+    # Unsupported first-claim in metadata
+    if not allow_first_claim and any(p in metadata_text for p in _FIRST_CLAIM_PATTERNS):
+        problem = "Metadata uses unsupported first/never-before legal framing."
+        instruction = "Remove or qualify first/never-before framing from metadata fields."
+        metadata_issues.append({
+            "severity": "high",
+            "type": "metadata_unsupported_legal_claim",
+            "problem": problem,
+        })
+        metadata_targets.append(
+            _meta_target("youtube_metadata", "metadata_unsupported_legal_claim", problem, instruction)
+        )
+
+    # Forbidden name variants in metadata
+    for variant in forbidden_name_variants:
+        if variant and variant in metadata_text:
+            problem = f"Metadata contains forbidden name variant: {variant}"
+            instruction = f"Replace '{variant}' with the verified name spelling in all metadata fields."
+            metadata_issues.append({
+                "severity": "high",
+                "type": "metadata_forbidden_name_variant",
+                "problem": problem,
+            })
+            metadata_targets.append(
+                _meta_target("youtube_metadata", "metadata_forbidden_name_variant", problem, instruction)
+            )
 
     tags = metadata.get("tags", [])
     if tags and not (tags_min <= len(tags) <= tags_max):
+        problem = f"Metadata has {len(tags)} tags; expected {tags_min}–{tags_max}."
+        instruction = f"Adjust tags list to between {tags_min} and {tags_max} entries."
         metadata_issues.append({
             "severity": "medium",
             "type": "tag_count",
-            "problem": f"Metadata has {len(tags)} tags; expected {tags_min}-{tags_max}.",
+            "problem": problem,
         })
+        metadata_targets.append(
+            _meta_target("tags", "tag_count", problem, instruction)
+        )
 
     estimated_duration = round(
         sum(_word_count(c.get("text", "")) for c in chunks) / settings.hindi_narration_wpm,
@@ -153,7 +240,6 @@ def run_python_preflight(
     )
     chapters = metadata.get("chapters", [])
     if chapters:
-        # If chapters contain timestamps beyond estimated duration, flag as estimated-only risk.
         metadata_issues.append({
             "severity": "low",
             "type": "chapters_before_audio",
@@ -162,19 +248,29 @@ def run_python_preflight(
                 f"{estimated_duration} min; verify timestamps after ElevenLabs."
             ),
         })
+        # chapters_before_audio is low severity — no metadata_repair_target needed
+
+    # ── Severity aggregation ──────────────────────────────────────────────────
+    all_issues = issues + metadata_issues
+    severity_counts = {
+        "high":   sum(1 for i in all_issues if i.get("severity") == "high"),
+        "medium": sum(1 for i in all_issues if i.get("severity") == "medium"),
+        "low":    sum(1 for i in all_issues if i.get("severity") == "low"),
+    }
+    blocking = severity_counts["high"] > 0 or severity_counts["medium"] > 0
+    passed = len(all_issues) == 0
 
     report = {
-        "passed": not issues and not metadata_issues,
+        "passed": passed,
+        "blocking": blocking,
         "issues": issues,
         "chunk_repair_targets": _dedupe_targets(chunk_targets),
         "metadata_issues": metadata_issues,
+        "metadata_repair_targets": metadata_targets,
+        "severity_counts": severity_counts,
         "estimated_duration_min": estimated_duration,
         "target_duration_min": target_duration_min,
         "hinglish_level": hinglish_level,
-        "notes": [
-            "Deterministic preflight runs before final premium gates.",
-            "If this report fails, repair should happen before OpenAI final review.",
-        ],
     }
 
     review_dir.mkdir(parents=True, exist_ok=True)
@@ -195,4 +291,3 @@ def _dedupe_targets(targets: list[dict[str, str]]) -> list[dict[str, str]]:
         else:
             by_key[key] = dict(target)
     return list(by_key.values())
-

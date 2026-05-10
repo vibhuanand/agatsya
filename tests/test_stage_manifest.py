@@ -201,3 +201,34 @@ def test_prompt_changed_missing_file_returns_false(tmp_path):
     (prompts_dir / "fact_lock_agent.txt").unlink()
     result = prompt_changed(tmp_path, "fact_lock", prompts_dir)
     assert result is False
+
+
+# ── Pipeline reuse disabling (Phase 2) ───────────────────────────────────────
+
+def test_pipeline_disables_reuse_when_inputs_change(tmp_path):
+    """When inputs_changed() returns True, the pipeline should NOT reuse stage outputs.
+
+    This test verifies the underlying inputs_changed() contract that the pipeline
+    relies on to disable _tls.reuse_ok. The actual _tls flag is set in run_agent_pipeline
+    and is tested indirectly via inputs_changed behavior.
+    """
+    _save(tmp_path)
+
+    # Same inputs → no stale detection
+    assert inputs_changed(tmp_path, _TRANSCRIPT, _COST_MODE, _HINGLISH, _DURATION) is False
+
+    # Different transcript → stale detected
+    assert inputs_changed(tmp_path, _TRANSCRIPT + " edited.", _COST_MODE, _HINGLISH, _DURATION) is True
+
+
+def test_inputs_changed_catches_tail_edit_beyond_old_truncation(tmp_path):
+    """Changing characters past position 10000 must still be detected.
+
+    The old v1 manifest truncated the hash input to 10K chars, silently missing
+    changes to long transcripts. The v2 SHA-256 covers the full text.
+    """
+    base = "अ" * 12_000
+    _save(tmp_path, transcript=base)
+    # Edit at position 11000 — beyond old truncation point
+    edited = base[:11_000] + "ब" + base[11_001:]
+    assert inputs_changed(tmp_path, edited, _COST_MODE, _HINGLISH, _DURATION) is True

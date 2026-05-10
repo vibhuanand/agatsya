@@ -85,13 +85,20 @@ def test_first_claim_allowed_when_flag_set(tmp_path):
     assert "unsupported_legal_claim" not in types
 
 
-def test_graphic_child_term_flagged(tmp_path):
-    script = make_script([make_chunk("001", "तीसरे दर्जे की जलन के निशान मिले।")])
+def test_generic_do_not_use_term_in_narration_flagged(tmp_path):
+    """Forbidden terms from case_glossary.do_not_use are caught in narration chunks.
+
+    The old hardcoded _GRAPHIC_CHILD_TERMS list was case-specific. The generic
+    mechanism is: add the term to do_not_use in the glossary → preflight catches it.
+    """
+    script = make_script([make_chunk("001", "यह सबसे भयानक मामला था।")])
+    # "सबसे भयानक" is in the default do_not_use list
     glossary = make_glossary()
     result = _run(script, glossary, tmp_path)
     assert result["passed"] is False
+    assert result["blocking"] is True
     types = [i["type"] for i in result["issues"]]
-    assert "youtube_safety" in types
+    assert "case_glossary" in types
 
 
 def test_title_too_long_in_metadata(tmp_path):
@@ -138,25 +145,112 @@ def test_estimated_duration_in_report(tmp_path):
     assert result["estimated_duration_min"] > 0
 
 
+# ── New output shape (Phase 4) ────────────────────────────────────────────────
+
+def test_report_has_blocking_field(tmp_path):
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    assert "blocking" in result
+    assert isinstance(result["blocking"], bool)
+
+
+def test_report_has_severity_counts(tmp_path):
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    sc = result.get("severity_counts", {})
+    assert "high" in sc and "medium" in sc and "low" in sc
+
+
+def test_clean_script_has_blocking_false(tmp_path):
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    assert result["blocking"] is False
+
+
+def test_high_issue_sets_blocking_true(tmp_path):
+    """A high-severity issue (unsupported legal claim) must set blocking=True."""
+    script = make_script([make_chunk("001", "यह भारत का पहला मामला था।")])
+    glossary = make_glossary(allow_first_claim=False)
+    result = _run(script, glossary, tmp_path)
+    assert result["blocking"] is True
+    assert result["severity_counts"]["high"] > 0
+
+
+def test_medium_issue_sets_blocking_true(tmp_path):
+    """A medium-severity issue must also set blocking=True."""
+    script = make_script([make_chunk("001", "वह उसे miss कर रही थी।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path, hinglish=2)
+    assert result["blocking"] is True
+    assert result["severity_counts"]["medium"] > 0
+
+
+def test_low_only_issue_does_not_block(tmp_path):
+    """A low-severity issue alone must NOT set blocking=True."""
+    metadata = make_metadata()
+    metadata["chapters"] = [{"title": "भाग 1", "timestamp": "0:00"}]
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    # chapters_before_audio is low — should not block
+    assert result["blocking"] is False
+    assert result["severity_counts"]["low"] >= 1
+
+
+def test_metadata_repair_targets_populated_on_title_too_long(tmp_path):
+    """Metadata issues must create structured metadata_repair_targets entries."""
+    long_title = "अ" * 101
+    script = make_script(
+        [make_chunk("001", "साफ़ पाठ।")],
+        metadata=make_metadata(title=long_title),
+    )
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    assert "metadata_repair_targets" in result
+    assert len(result["metadata_repair_targets"]) > 0
+    first = result["metadata_repair_targets"][0]
+    assert "field" in first
+    assert "issue_type" in first
+    assert "repair_instruction" in first
+
+
+def test_metadata_repair_targets_empty_when_clean(tmp_path):
+    """No metadata issues → metadata_repair_targets must be an empty list."""
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    result = _run(script, glossary, tmp_path)
+    assert result["metadata_repair_targets"] == []
+
+
+def test_forbidden_name_variant_in_narration_high_severity(tmp_path):
+    """Forbidden name variants in narration must be high severity and blocking."""
+    script = make_script([make_chunk("001", "Kyla Jordan ने खेला।")])
+    glossary = make_glossary()
+    # Inject forbidden_name_variants into the glossary directly
+    glossary["forbidden_name_variants"] = ["Kyla Jordan"]
+    result = _run(script, glossary, tmp_path)
+    assert result["blocking"] is True
+    types = [i["type"] for i in result["issues"]]
+    assert "forbidden_name_variant" in types
+
+
 # ── Known bug: झींगुर hardcoding fires for ANY case ──────────────────────────
 
-@pytest.mark.xfail(
-    reason="Phase 3 needed: python_preflight hardcodes झींगुर check for any case, "
-           "not just ladybug cases. Non-ladybug scripts mentioning insects fail incorrectly.",
-    strict=True,
-)
-def test_jhingur_in_non_ladybug_script_should_not_be_flagged(tmp_path):
-    """A non-ladybug case that happens to mention झींगुर (cricket / insect sound
-    as local atmosphere) should NOT be flagged as a motif error.
+def test_jhingur_in_non_ladybug_script_is_not_flagged(tmp_path):
+    """A non-ladybug case mentioning झींगुर (cricket sounds as atmosphere) must NOT
+    be flagged — झींगुर is only forbidden when the case glossary says so.
 
-    Currently FAILS: the hardcoded `if "झींगुर" in text` check in
-    python_preflight_service.py fires regardless of case type.
-    Fix: derive forbidden insect terms from the case glossary (Phase 3).
+    Phase 3/4 fix: the hardcoded '`if "झींगुर" in text`' check was removed.
+    Forbidden terms now come exclusively from case_glossary.do_not_use.
     """
     script = make_script([
         make_chunk("001", "रात को झींगुर की आवाज़ें सुनाई देती थीं।")
     ])
-    # do_not_use does NOT contain झींगुर — this is a murder case, not a ladybug case
+    # do_not_use does NOT contain झींगुर — this is a generic murder case
     glossary = make_glossary(do_not_use=["सबसे भयानक"])
     result = _run(script, glossary, tmp_path)
     assert result["passed"] is True
+    assert result["blocking"] is False

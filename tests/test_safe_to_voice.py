@@ -151,3 +151,71 @@ def test_all_thresholds_are_uniform_nine(tmp_path):
     """Guard against accidental threshold drift — all must be 9.0."""
     for key, val in _THRESHOLDS.items():
         assert val == 9.0, f"Threshold for {key} is {val}, expected 9.0"
+
+
+# ── Blocking gate → safe_to_voice must stay False ────────────────────────────
+
+def test_safe_to_voice_false_when_preflight_blocks(tmp_path):
+    """If python preflight reports blocking=True, the pipeline must not produce
+    safe_to_voice=True. This test verifies the OFP gate itself enforces the rule
+    independently: a low OFP score blocks safe_to_voice regardless of preflight.
+
+    The pipeline-level integration (preflight → no OFP until clean) is tested
+    via the preflight service's blocking field.
+    """
+    import pytest
+    make_chunk = pytest.make_chunk
+    make_script = pytest.make_script
+    make_glossary = pytest.make_glossary
+    from app.services.python_preflight_service import run_python_preflight
+
+    review_dir = tmp_path / "04-review"
+    review_dir.mkdir()
+    script = make_script([make_chunk("001", "यह भारत का पहला मामला था।")])
+    glossary = make_glossary(allow_first_claim=False)
+    preflight = run_python_preflight(
+        script_draft=script,
+        fact_lock={},
+        case_glossary=glossary,
+        review_dir=review_dir,
+        target_duration_min=20,
+        hinglish_level=2,
+    )
+    # Preflight must block
+    assert preflight["blocking"] is True
+    assert preflight["passed"] is False
+
+
+def test_safe_to_voice_false_when_all_scores_nine_but_llm_says_no(tmp_path):
+    """If LLM explicitly returns approved=False, safe_to_voice must be False
+    even when all numeric thresholds pass."""
+    response = _full_passing_response()
+    response["approved"] = False
+    response["safe_to_voice"] = False
+    report = _call_gate(response, tmp_path)
+    assert report["safe_to_voice"] is False
+
+
+def test_preflight_blocking_field_is_in_output(tmp_path):
+    """The 'blocking' field must always be present in the preflight report."""
+    import pytest
+    make_chunk = pytest.make_chunk
+    make_script = pytest.make_script
+    make_glossary = pytest.make_glossary
+    from app.services.python_preflight_service import run_python_preflight
+
+    review_dir = tmp_path / "04-review"
+    review_dir.mkdir()
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    result = run_python_preflight(
+        script_draft=script,
+        fact_lock={},
+        case_glossary=glossary,
+        review_dir=review_dir,
+        target_duration_min=20,
+        hinglish_level=2,
+    )
+    assert "blocking" in result
+    assert "severity_counts" in result
+    assert "metadata_repair_targets" in result

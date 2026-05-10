@@ -2,11 +2,13 @@
 
 Deterministic, zero-model-cost stage that turns Fact Lock + Story Blueprint
 into a compact writing constraint sheet for downstream agents.
+
+All restrictions are derived from the case data (fact_lock + blueprint).
+No case-specific names, motifs, or objects are hardcoded here.
 """
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -55,18 +57,78 @@ def _verified_names(fact_lock: dict[str, Any]) -> list[str]:
     return names
 
 
+def _forbidden_name_variants(fact_lock: dict[str, Any]) -> list[str]:
+    """Collect forbidden name variants from fact_lock.verified_people.
+
+    Each person may optionally carry a 'forbidden_name_variants' list —
+    alternate spellings or aliases that must not appear in the script.
+    """
+    variants: list[str] = []
+    for person in fact_lock.get("verified_people", []):
+        for v in person.get("forbidden_name_variants", []):
+            if v and v not in variants:
+                variants.append(v)
+    return variants
+
+
 def _has_high_confidence_first_claim(fact_lock: dict[str, Any]) -> bool:
-    """Return true only when source facts explicitly support first-time framing."""
+    """Return True only when source facts explicitly support first-time framing.
+
+    Searches for explicit "first case / पहली बार / पहला मामला" phrasing in
+    high-confidence timeline events and source phrases. Legal charge labels
+    like 'first-degree murder' do NOT count as evidence of a first-time claim.
+    """
+    _FIRST_CLAIM_PHRASES = ["पहली बार", "पहला मामला", "पहले कभी", "first ever", "never before"]
     sources: list[str] = []
     for item in fact_lock.get("verified_timeline", []):
         if item.get("confidence") == "high":
-            sources.append(item.get("event", ""))
             sources.append(item.get("source_phrase", ""))
+            # Only use event text if it explicitly contains a first-claim phrase
+            evt = item.get("event", "")
+            if any(p.lower() in evt.lower() for p in _FIRST_CLAIM_PHRASES):
+                sources.append(evt)
     legal = fact_lock.get("legal_outcome", {})
     if legal.get("confidence") == "high":
-        sources.extend(str(v) for v in legal.values() if isinstance(v, str))
+        # Exclude charge field — "first-degree murder" is a charge type, not a
+        # first-ever-case claim; checking it causes false positives.
+        for k, v in legal.items():
+            if k != "charge" and isinstance(v, str):
+                sources.append(v)
     joined = " ".join(sources)
-    return _contains(joined, "first", "पहली बार", "पहला मामला", "पहले कभी")
+    return _contains(joined, *_FIRST_CLAIM_PHRASES)
+
+
+def _motif_constraints_from_blueprint(
+    blueprint: dict[str, Any],
+    preferred_terms: dict[str, str],
+    do_not_use: list[str],
+) -> dict[str, Any]:
+    """Derive motif constraints from blueprint.motif_terms (if present).
+
+    blueprint.motif_terms is an optional list of dicts:
+      {"english": "ladybug", "preferred_hindi": "लेडीबग", "forbidden_hindi": ["झींगुर", "तितलियाँ"]}
+
+    This keeps motif restrictions case-driven, not hardcoded.
+    """
+    constraints: dict[str, Any] = {}
+    for motif in blueprint.get("motif_terms", []):
+        english = motif.get("english", "")
+        preferred_hindi = motif.get("preferred_hindi", "")
+        forbidden_hindi: list[str] = motif.get("forbidden_hindi", [])
+
+        if english and preferred_hindi:
+            preferred_terms[english] = preferred_hindi
+
+        for term in forbidden_hindi:
+            if term and term not in do_not_use:
+                do_not_use.append(term)
+
+        if english:
+            constraints[english] = {
+                "preferred_hindi": preferred_hindi,
+                "forbidden_hindi": forbidden_hindi,
+            }
+    return constraints
 
 
 def build_case_glossary(
@@ -74,23 +136,25 @@ def build_case_glossary(
     blueprint: dict[str, Any],
     facts_dir: Path,
 ) -> dict[str, Any]:
-    """Build and save 02-facts/case_glossary.json."""
-    text_blob = json.dumps(
-        {"fact_lock": fact_lock, "blueprint": blueprint},
-        ensure_ascii=False,
-    )
+    """Build and save 02-facts/case_glossary.json.
+
+    All restrictions are derived from fact_lock and blueprint data.
+    No case-specific names, motifs, or objects are hardcoded.
+    """
     preferred_terms = dict(_BASE_PREFERRED_TERMS)
     do_not_use = list(_BASE_DO_NOT_USE)
 
-    if _contains(text_blob, "ladybug", "ladybugs", "लेडीबग"):
-        preferred_terms["ladybug"] = "लेडीबग"
-        preferred_terms["ladybugs"] = "लेडीबग"
-        do_not_use.extend(["झींगुर", "तितलियाँ"])
+    # Motif constraints — driven by blueprint.motif_terms (case-specific data)
+    motif_constraints = _motif_constraints_from_blueprint(blueprint, preferred_terms, do_not_use)
 
+    # Verified names from fact_lock
     verified_names = _verified_names(fact_lock)
-    lower_names = {n.lower() for n in verified_names}
-    if "kyla woodhouse" in lower_names:
-        do_not_use.append("Kyla Jordan")
+
+    # Forbidden name variants — from fact_lock.verified_people[].forbidden_name_variants
+    forbidden_variants = _forbidden_name_variants(fact_lock)
+    for v in forbidden_variants:
+        if v not in do_not_use:
+            do_not_use.append(v)
 
     legal_claim_rules = {
         "allow_first_case_claim": _has_high_confidence_first_claim(fact_lock),
@@ -111,6 +175,8 @@ def build_case_glossary(
         "preferred_terms": preferred_terms,
         "do_not_use": sorted(set(do_not_use)),
         "verified_name_spellings": verified_names,
+        "forbidden_name_variants": forbidden_variants,
+        "motif_constraints": motif_constraints,
         "legal_claim_rules": legal_claim_rules,
         "youtube_metadata_rules": {
             "recommended_title_max_chars": 100,
@@ -134,4 +200,3 @@ def build_case_glossary(
         encoding="utf-8",
     )
     return glossary
-

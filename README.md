@@ -223,6 +223,41 @@ When no Retention Blueprint was generated (standard mode or blueprint failure), 
 
 ---
 
+## Security and Sharing
+
+### Never share your `.env` file
+
+`.env` contains API keys for Anthropic, OpenAI, ElevenLabs, and other services.
+**Never commit it to git. Never zip and send it to a reviewer. Never paste it in Slack or email.**
+
+If `.env` was accidentally shared or zipped, **rotate all API keys immediately:**
+- Anthropic: https://console.anthropic.com/settings/keys
+- OpenAI: https://platform.openai.com/api-keys
+- ElevenLabs: https://elevenlabs.io/settings/api-keys
+
+### Never share `app/storage/` unless intentional
+
+`app/storage/` contains all generated episode files (scripts, audio, metadata).
+These may include sensitive case details. Do not share storage contents unless
+you explicitly intend to share a specific episode output.
+
+### Sharing the repo with reviewers
+
+Use the provided clean export script to create a ZIP that excludes `.env`, storage,
+virtual environments, and git history:
+
+```powershell
+# Windows / PowerShell
+.\scripts\export_clean_zip.ps1
+
+# With a custom output path
+.\scripts\export_clean_zip.ps1 -OutputPath "C:\Shared\agatsya-review.zip"
+```
+
+The script aborts if `.env` would be included. Verify the ZIP is clean before sending.
+
+---
+
 ## Quickstart
 
 ### 1. Clone and configure

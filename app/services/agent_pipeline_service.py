@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,15 @@ logger = logging.getLogger(__name__)
 
 # Prompts directory — used for prompt hash guards in stage reuse
 _PROMPTS_DIR = Path("app/prompts")
+
+# Per-run reuse flag — set in run_agent_pipeline() based on inputs_changed().
+# Using threading.local so concurrent requests each get their own flag.
+_tls = threading.local()
+
+
+def _run_reuse_allowed() -> bool:
+    """True when stage reuse is permitted for the current pipeline run."""
+    return getattr(_tls, "reuse_ok", True)
 
 
 # ─── Schema validation helpers ────────────────────────────────────────────────
@@ -215,7 +225,7 @@ def _try_load_existing_json(
     is forced to re-run regardless of REUSE_EXISTING_STAGE_OUTPUTS=true.
     This prevents silently reusing stale output after prompt edits.
     """
-    if not settings.reuse_existing_stage_outputs:
+    if not settings.reuse_existing_stage_outputs or not _run_reuse_allowed():
         return None
     # Prompt hash guard
     if episode_dir is not None and prompt_check is not None:
@@ -238,7 +248,7 @@ def _try_load_existing_json(
 
 def _try_load_existing_text(path: Path, stage_name: str) -> str | None:
     """Load a plain-text stage output if reuse is enabled and file exists."""
-    if not settings.reuse_existing_stage_outputs:
+    if not settings.reuse_existing_stage_outputs or not _run_reuse_allowed():
         return None
     if path.exists():
         try:
@@ -505,22 +515,29 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     (input_dir / "source_transcript.txt").write_text(inp.raw_transcript, encoding="utf-8")
     (input_dir / "input_payload.json").write_text(inp.model_dump_json(indent=2), encoding="utf-8")
 
-    # If REUSE_EXISTING_STAGE_OUTPUTS=true, compare current inputs against the PREVIOUS
-    # manifest before overwriting it, so we can warn about stale cached stage outputs.
-    if settings.reuse_existing_stage_outputs and stage_manifest_service.inputs_changed(
-        episode_dir=episode_dir,
-        raw_transcript=inp.raw_transcript,
-        cost_mode=inp.cost_mode,
-        hinglish_level=inp.hinglish_level,
-        target_duration_min=inp.target_duration_min,
-    ):
+    # Check whether inputs changed versus the PREVIOUS manifest (before overwriting it).
+    # If they have, disable stage reuse entirely for this run so stale cached outputs
+    # are never silently returned.
+    _inputs_stale = (
+        settings.reuse_existing_stage_outputs
+        and stage_manifest_service.inputs_changed(
+            episode_dir=episode_dir,
+            raw_transcript=inp.raw_transcript,
+            cost_mode=inp.cost_mode,
+            hinglish_level=inp.hinglish_level,
+            target_duration_min=inp.target_duration_min,
+        )
+    )
+    if _inputs_stale:
+        _tls.reuse_ok = False
         _stale_msg = (
-            "Input or settings changed since last run — REUSE_EXISTING_STAGE_OUTPUTS=true "
-            "may return stale results for stages already on disk. "
-            "Consider setting REUSE_EXISTING_STAGE_OUTPUTS=false for a full re-run."
+            "Input or settings changed since last run — stage reuse disabled for this run. "
+            "All stages will re-execute to avoid returning stale results."
         )
         logger.warning(_stale_msg)
         warnings.append(_stale_msg)
+    else:
+        _tls.reuse_ok = True
 
     # Save stage manifest (always update after stale check so next run has fresh fingerprint)
     # prompts_dir enables prompt hash tracking — forces rerun if a prompt file was edited
@@ -782,6 +799,10 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         target_duration_min=inp.target_duration_min,
         hinglish_level=inp.hinglish_level,
     )
+    # Carry preflight blocking + metadata targets forward so Stage 13a can use them.
+    _preflight_blocking = preflight_report.get("blocking", False)
+    _preflight_meta_targets = preflight_report.get("metadata_repair_targets", [])
+
     if not preflight_report.get("passed", False):
         pf_targets = preflight_report.get("chunk_repair_targets", [])
         pf_metadata = preflight_report.get("metadata_issues", [])
@@ -1202,11 +1223,41 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             )
             status = "needs_human_review"
 
-        # ── Stage 13a: Metadata Repair (if gate failed) ──────────────────────
+        # ── Stage 13a: Metadata Repair (if gate failed OR preflight blocked) ──
+        # Trigger repair when:
+        #   - Claude's metadata quality gate failed (gate_passed=False), OR
+        #   - Python preflight found blocking metadata issues (preflight.blocking=True
+        #     AND metadata_repair_targets is non-empty).
+        # This ensures Python-detected metadata problems are fixed before the
+        # expensive OpenAI Final Premium Gate is called.
+        _preflight_forces_meta_repair = (
+            _preflight_blocking
+            and bool(_preflight_meta_targets)
+            and metadata_report.get("gate_passed", False)  # gate passed but preflight blocked
+        )
+        if _preflight_forces_meta_repair:
+            # Inject preflight targets as required_fixes so metadata repair agent sees them
+            existing_req = list(metadata_report.get("required_fixes", []))
+            for tgt in _preflight_meta_targets:
+                problem = tgt.get("problem", "")
+                if problem and problem not in existing_req:
+                    existing_req.append(problem)
+            metadata_report["required_fixes"] = existing_req
+            metadata_report["gate_passed"] = False  # force repair
+            logger.info(
+                "Stage 13a — Python preflight blocking metadata issues will trigger metadata repair "
+                "(%d preflight targets injected)", len(_preflight_meta_targets)
+            )
+            warnings.append(
+                "Python preflight found blocking metadata issues — "
+                "metadata repair triggered before OpenAI Final Premium Gate. "
+                "See 04-review/python_preflight_report.json."
+            )
+
         metadata_repair_has_failures = False
         if not metadata_report.get("gate_passed", False):
             meta_required_fixes = metadata_report.get("required_fixes", [])
-            if meta_required_fixes:
+            if meta_required_fixes and not _preflight_forces_meta_repair:
                 warnings.append(
                     "Metadata quality gate FAILED. Required fixes: "
                     + "; ".join(meta_required_fixes[:3])
