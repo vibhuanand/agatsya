@@ -34,6 +34,10 @@ _SENSATIONAL_HINDI_PHRASES = [
     "रूह कांप जाएगी",
     "हिला देने वाला सच",
     "पूरी सच्चाई पहली बार",
+    # Hindi YouTube-risk equivalents
+    "रूह कंपा देने वाला",
+    "सच्चाई पहली बार",
+    "देखकर कांप जाएंगे",
 ]
 
 # Unverified media authenticity claims — high severity.
@@ -50,6 +54,14 @@ _UNVERIFIED_CLAIM_PHRASES = [
     "leaked footage",
     "never seen before",
     "law changed forever",
+    # Hindi equivalents
+    "असली आवाज़",
+    "असली चीख",
+    "आख़िरी शब्द",
+    "लीक वीडियो",
+    "लीक फुटेज",
+    "कैमरे में कैद",
+    "CCTV में कैद",
 ]
 
 # Generic graphic/gory content — always high severity regardless of glossary.
@@ -60,6 +72,10 @@ _GRAPHIC_CONTENT_PHRASES = [
     "mutilated body",
     "torture footage",
     "graphic violence",
+    # Hindi equivalents
+    "खून से लथपथ",
+    "शरीर के टुकड़े",
+    "दरिंदगी की हद",
 ]
 
 # Sexualized victim framing — always high severity.

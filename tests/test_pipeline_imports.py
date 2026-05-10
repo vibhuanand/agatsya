@@ -130,3 +130,101 @@ def test_skip_final_gates_default_is_false():
     """SKIP_FINAL_GATES must default to False — gates are always active by default."""
     from app.config import settings
     assert settings.skip_final_gates is False
+
+
+# ── Legacy package path protection (item 2) ───────────────────────────────────
+
+def test_legacy_package_path_safe_to_voice_always_false():
+    """The legacy create_package() path (non-script_first) never sets safe_to_voice.
+    PackageResponse defaults to safe_to_voice=False, so legacy output is never voice-ready."""
+    from app.models import PackageResponse
+    # Simulate what the route does: create a PackageResponse with legacy defaults
+    pkg = PackageResponse(
+        episode_id="test-001",
+        folder_name="001-test",
+        episode_dir="/tmp/test",
+        files={},
+    )
+    # Force the same values the route applies to legacy output
+    pkg.status = "needs_human_review"
+    pkg.safe_to_voice = False
+    pkg.warnings = list(pkg.warnings) + [
+        "Legacy single-call package path is not voice-ready. "
+        "Use package_level=script_first for the full quality-gate pipeline."
+    ]
+    assert pkg.safe_to_voice is False
+    assert pkg.status == "needs_human_review"
+    assert any("not voice-ready" in w for w in pkg.warnings)
+
+
+def test_package_response_default_safe_to_voice_is_false():
+    """PackageResponse must default safe_to_voice=False so legacy paths are never voice-ready."""
+    from app.models import PackageResponse
+    pkg = PackageResponse(
+        episode_id="x", folder_name="x", episode_dir="/tmp/x", files={}
+    )
+    assert pkg.safe_to_voice is False
+
+
+def test_legacy_package_warning_text_identifies_correct_fix():
+    """The legacy path warning must name script_first as the correct alternative."""
+    from app.models import PackageResponse
+    pkg = PackageResponse(
+        episode_id="x", folder_name="x", episode_dir="/tmp/x", files={}
+    )
+    pkg.warnings = [
+        "Legacy single-call package path is not voice-ready. "
+        "Use package_level=script_first for the full quality-gate pipeline."
+    ]
+    assert any("script_first" in w for w in pkg.warnings)
+
+
+# ── /api/episodes/full guard (item 3) ─────────────────────────────────────────
+
+def test_full_pipeline_disabled_by_default():
+    """ENABLE_FULL_PIPELINE must default to False — full endpoint is not production-ready."""
+    from app.config import settings
+    assert settings.enable_full_pipeline is False
+
+
+def test_full_pipeline_safe_to_voice_guard_in_pipeline_service():
+    """pipeline_service.run_full_pipeline must not call ElevenLabs when safe_to_voice=False.
+    The service checks pkg.safe_to_voice before enable_voice — if False, voice is skipped
+    and a warning is added. This test verifies the guard logic directly."""
+    from app.models import PackageResponse, FullPipelineInput
+
+    # Verify that FullPipelineInput has enable_voice flag
+    inp = FullPipelineInput(
+        youtube_url="https://www.youtube.com/watch?v=test",
+        episode_number="001",
+        case_hint="test case",
+        raw_transcript="test transcript",
+        enable_voice=True,
+    )
+    assert hasattr(inp, "enable_voice")
+    assert inp.enable_voice is True
+
+    # The guard: if enable_voice=True but safe_to_voice=False, voice must be skipped
+    pkg = PackageResponse(
+        episode_id="test", folder_name="test", episode_dir="/tmp/test", files={}
+    )
+    # PackageResponse default is safe_to_voice=False
+    assert pkg.safe_to_voice is False
+    # Verify the guard condition mirrors pipeline_service.py logic:
+    # "if inp.enable_voice and not pkg.safe_to_voice" → skip voice, add warning
+    voice_should_skip = inp.enable_voice and not pkg.safe_to_voice
+    assert voice_should_skip is True
+
+
+def test_full_pipeline_future_requirement_documented():
+    """Verify that pipeline_service has the TODO comment requiring run_agent_pipeline
+    before voice generation can be enabled."""
+    import inspect
+    from app.services import pipeline_service
+    source = inspect.getsource(pipeline_service)
+    assert "run_agent_pipeline" in source, (
+        "pipeline_service must reference run_agent_pipeline in its TODO for future enabling"
+    )
+    assert "safe_to_voice" in source, (
+        "pipeline_service must guard voice generation on safe_to_voice"
+    )

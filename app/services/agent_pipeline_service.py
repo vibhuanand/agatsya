@@ -999,7 +999,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         # ── Stage 9: Hindi Copyedit Gate ──────────────────────────────────────
         logger.info("Stage 9 — Hindi Copyedit Gate")
         existing_ce = _try_load_existing(
-            review_dir / "hindi_copyedit_report.json", "hindi_copyedit"
+            review_dir / "hindi_copyedit_report.json", "hindi_copyedit",
+            episode_dir=episode_dir, prompt_check="hindi_copyedit",
         )
         if existing_ce is not None:
             copyedit_report = existing_ce
@@ -1128,7 +1129,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         # ── Stage 11: Originality & Safety Gate ───────────────────────────────
         logger.info("Stage 11 — Originality Safety Gate")
         existing_orig = _try_load_existing(
-            review_dir / "originality_safety_gate_report.json", "originality_gate"
+            review_dir / "originality_safety_gate_report.json", "originality_gate",
+            episode_dir=episode_dir, prompt_check="originality_safety",
         )
         if existing_orig is not None:
             originality_report = existing_orig
@@ -1165,7 +1167,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         # ── Stage 12: Recreated Dialogue Quality Gate ─────────────────────────
         logger.info("Stage 12 — Recreated Dialogue Quality Gate")
         existing_dlg = _try_load_existing(
-            review_dir / "recreated_dialogue_gate_report.json", "dialogue_gate"
+            review_dir / "recreated_dialogue_gate_report.json", "dialogue_gate",
+            episode_dir=episode_dir, prompt_check="recreated_dialogue",
         )
         if existing_dlg is not None:
             dialogue_report = existing_dlg
@@ -1202,7 +1205,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         # ── Stage 13: Metadata Quality Gate ───────────────────────────────────
         logger.info("Stage 13 — Metadata Quality Gate")
         existing_meta = _try_load_existing(
-            review_dir / "metadata_quality_gate_report.json", "metadata_gate"
+            review_dir / "metadata_quality_gate_report.json", "metadata_gate",
+            episode_dir=episode_dir, prompt_check="metadata_quality",
         )
         if existing_meta is not None:
             metadata_report = existing_meta
@@ -1337,7 +1341,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         if retention_blueprint:
             logger.info("Stage 9.5 — Retention Quality Gate")
             existing_rq = _try_load_existing(
-                review_dir / "retention_quality_report.json", "retention_quality"
+                review_dir / "retention_quality_report.json", "retention_quality",
+                episode_dir=episode_dir, prompt_check="retention_quality",
             )
             if existing_rq is not None:
                 retention_report = existing_rq
@@ -1740,128 +1745,15 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                             "original content kept. Manual review required."
                                         )
 
-                                    # ── Task 6: Refresh deterministic checks ──
-                                    # Re-run lint and text similarity on the repaired
-                                    # script before the recheck so the gate receives
-                                    # updated evidence, not the pre-repair values.
+                                    # ── Stage 16b: Python preflight (pre-recheck guard) ──
+                                    # Run cheap deterministic check BEFORE the expensive
+                                    # OpenAI recheck. If OAI repair introduced new safety
+                                    # issues, block here and skip the OFP recheck entirely.
                                     logger.info(
-                                        "Stage 16 post-repair — "
-                                        "Refreshing Hindi lint + text similarity"
+                                        "Stage 16b — Python Preflight recheck "
+                                        "(pre-OFP-recheck safety guard)"
                                     )
-                                    lint_report = run_hindi_text_lint(
-                                        script_final,
-                                        hinglish_level=inp.hinglish_level,
-                                    )
-                                    (review_dir / "hindi_text_lint_report.json").write_text(
-                                        json.dumps(
-                                            lint_report, ensure_ascii=False, indent=2
-                                        ),
-                                        encoding="utf-8",
-                                    )
-                                    _sim_transcript = (
-                                        episode_dir / "01-input" / "clean_transcript.txt"
-                                    ).read_text(encoding="utf-8")
-                                    similarity_report = run_text_similarity_check(
-                                        source_transcript=_sim_transcript,
-                                        script_draft=script_final,
-                                    )
-                                    (review_dir / "text_similarity_report.json").write_text(
-                                        json.dumps(
-                                            similarity_report, ensure_ascii=False, indent=2
-                                        ),
-                                        encoding="utf-8",
-                                    )
-                                    logger.info(
-                                        "Post-repair lint: %d issues (high=%d) | "
-                                        "similarity risk=%s",
-                                        lint_report.get("total_issues", 0),
-                                        lint_report.get("high_issues", 0),
-                                        similarity_report.get("risk_level", "?"),
-                                    )
-
-                                    # Task 5: Reload all latest gate reports
-                                    # (captures copyedit, metadata, etc. repairs too)
-                                    (lint_report, copyedit_report, quality_report,
-                                     retention_report, similarity_report,
-                                     originality_report, dialogue_report,
-                                     metadata_report) = _reload_latest_gate_reports(
-                                        review_dir,
-                                        lint_report, copyedit_report, quality_report,
-                                        retention_report, similarity_report,
-                                        originality_report, dialogue_report,
-                                        metadata_report,
-                                    )
-
-                                    # ── Stage 16a: Recheck (post-repair) ──────
-                                    # Saved to a separate file so the first-pass
-                                    # report is preserved as a reference.
-                                    logger.info(
-                                        "Stage 16a — Recheck OpenAI Final Premium Gate "
-                                        "(post-repair)"
-                                    )
-                                    try:
-                                        ofp_recheck = run_openai_final_premium_gate(
-                                            script_draft=script_final,
-                                            fact_lock=fact_lock,
-                                            blueprint=blueprint,
-                                            hinglish_level=inp.hinglish_level,
-                                            lint_report=lint_report,
-                                            copyedit_report=copyedit_report,
-                                            quality_report=quality_report,
-                                            retention_report=retention_report,
-                                            similarity_report=similarity_report,
-                                            originality_report=originality_report,
-                                            dialogue_report=dialogue_report,
-                                            metadata_report=metadata_report,
-                                            review_dir=review_dir,
-                                            label="_after_repair",
-                                        )
-                                        ofp_report = ofp_recheck
-                                        ofp_now_passed = (
-                                            ofp_recheck.get("approved", False)
-                                            and ofp_recheck.get("safe_to_voice", False)
-                                        )
-                                        gate_summary["openai_final_premium"].update({
-                                            "passed":        ofp_now_passed,
-                                            "approved":      ofp_recheck.get("approved", False),
-                                            "safe_to_voice": ofp_recheck.get("safe_to_voice", False),
-                                            "overall_score": ofp_recheck.get("overall_score", 0),
-                                            "recheck":       True,
-                                            "recheck_report": "openai_final_premium_report_after_repair.json",
-                                        })
-                                        if ofp_now_passed:
-                                            logger.info(
-                                                "OpenAI Final Premium Gate recheck: PASSED"
-                                            )
-                                        else:
-                                            status = "needs_human_review"
-                                            logger.warning(
-                                                "OpenAI Final Premium Gate recheck: still FAILED"
-                                            )
-                                            warnings.append(
-                                                f"OpenAI Final Premium Gate recheck FAILED "
-                                                f"(overall_score="
-                                                f"{ofp_recheck.get('overall_score', 0)}). "
-                                                "Manual review required. "
-                                                "See 04-review/"
-                                                "openai_final_premium_report_after_repair.json."
-                                            )
-                                    except Exception as exc:
-                                        logger.error(
-                                            "OpenAI Final Premium Gate recheck failed: %s",
-                                            exc,
-                                        )
-                                        warnings.append(
-                                            f"OpenAI Final Premium Gate recheck failed: {exc}. "
-                                            "Manual review required."
-                                        )
-                                        openai_repair_has_failures = True
-
-                                    # ── Stage 16b: Python preflight after OAI repair ──
-                                    # Guard: OAI repair must not introduce new safety issues.
-                                    logger.info(
-                                        "Stage 16b — Python Preflight recheck after OpenAI repair"
-                                    )
+                                    _post_oai_pf_blocking = False
                                     try:
                                         _post_oai_pf = run_python_preflight(
                                             script_draft=script_final,
@@ -1872,7 +1764,10 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                             hinglish_level=inp.hinglish_level,
                                             label="_after_openai_repair",
                                         )
-                                        if _post_oai_pf.get("blocking", False):
+                                        _post_oai_pf_blocking = _post_oai_pf.get(
+                                            "blocking", False
+                                        )
+                                        if _post_oai_pf_blocking:
                                             _po_counts = _post_oai_pf.get("severity_counts", {})
                                             status = "needs_human_review"
                                             gate_summary["python_preflight"].update({
@@ -1886,12 +1781,13 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                             })
                                             warnings.append(
                                                 "Post-OpenAI-repair Python preflight is BLOCKING. "
-                                                "safe_to_voice=False. "
+                                                "safe_to_voice=False. OFP recheck skipped. "
                                                 "See 04-review/python_preflight_report_after_openai_repair.json."
                                             )
                                             logger.warning(
-                                                "Stage 16b — Python preflight BLOCKING after OAI repair "
-                                                "(high=%d, medium=%d).",
+                                                "Stage 16b — Python preflight BLOCKING after OAI "
+                                                "repair (high=%d, medium=%d). "
+                                                "Skipping Stage 16a OFP recheck.",
                                                 _po_counts.get("high", 0),
                                                 _po_counts.get("medium", 0),
                                             )
@@ -1903,6 +1799,124 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                             f"Python preflight after OpenAI repair failed: {exc}. "
                                             "Manual review required."
                                         )
+
+                                    if not _post_oai_pf_blocking:
+                                        # ── Task 6: Refresh deterministic checks ──
+                                        # Run only when preflight is clean — avoids
+                                        # burning expensive OFP recheck on a bad script.
+                                        logger.info(
+                                            "Stage 16 post-repair — "
+                                            "Refreshing Hindi lint + text similarity"
+                                        )
+                                        lint_report = run_hindi_text_lint(
+                                            script_final,
+                                            hinglish_level=inp.hinglish_level,
+                                        )
+                                        (review_dir / "hindi_text_lint_report.json").write_text(
+                                            json.dumps(
+                                                lint_report, ensure_ascii=False, indent=2
+                                            ),
+                                            encoding="utf-8",
+                                        )
+                                        _sim_transcript = (
+                                            episode_dir / "01-input" / "clean_transcript.txt"
+                                        ).read_text(encoding="utf-8")
+                                        similarity_report = run_text_similarity_check(
+                                            source_transcript=_sim_transcript,
+                                            script_draft=script_final,
+                                        )
+                                        (review_dir / "text_similarity_report.json").write_text(
+                                            json.dumps(
+                                                similarity_report, ensure_ascii=False, indent=2
+                                            ),
+                                            encoding="utf-8",
+                                        )
+                                        logger.info(
+                                            "Post-repair lint: %d issues (high=%d) | "
+                                            "similarity risk=%s",
+                                            lint_report.get("total_issues", 0),
+                                            lint_report.get("high_issues", 0),
+                                            similarity_report.get("risk_level", "?"),
+                                        )
+
+                                        # Task 5: Reload all latest gate reports
+                                        # (captures copyedit, metadata, etc. repairs too)
+                                        (lint_report, copyedit_report, quality_report,
+                                         retention_report, similarity_report,
+                                         originality_report, dialogue_report,
+                                         metadata_report) = _reload_latest_gate_reports(
+                                            review_dir,
+                                            lint_report, copyedit_report, quality_report,
+                                            retention_report, similarity_report,
+                                            originality_report, dialogue_report,
+                                            metadata_report,
+                                        )
+
+                                        # ── Stage 16a: Recheck (post-repair) ──────
+                                        # Only runs when Stage 16b Python preflight is clean.
+                                        # Saved to a separate file so the first-pass
+                                        # report is preserved as a reference.
+                                        logger.info(
+                                            "Stage 16a — Recheck OpenAI Final Premium Gate "
+                                            "(post-repair)"
+                                        )
+                                        try:
+                                            ofp_recheck = run_openai_final_premium_gate(
+                                                script_draft=script_final,
+                                                fact_lock=fact_lock,
+                                                blueprint=blueprint,
+                                                hinglish_level=inp.hinglish_level,
+                                                lint_report=lint_report,
+                                                copyedit_report=copyedit_report,
+                                                quality_report=quality_report,
+                                                retention_report=retention_report,
+                                                similarity_report=similarity_report,
+                                                originality_report=originality_report,
+                                                dialogue_report=dialogue_report,
+                                                metadata_report=metadata_report,
+                                                review_dir=review_dir,
+                                                label="_after_repair",
+                                            )
+                                            ofp_report = ofp_recheck
+                                            ofp_now_passed = (
+                                                ofp_recheck.get("approved", False)
+                                                and ofp_recheck.get("safe_to_voice", False)
+                                            )
+                                            gate_summary["openai_final_premium"].update({
+                                                "passed":        ofp_now_passed,
+                                                "approved":      ofp_recheck.get("approved", False),
+                                                "safe_to_voice": ofp_recheck.get("safe_to_voice", False),
+                                                "overall_score": ofp_recheck.get("overall_score", 0),
+                                                "recheck":       True,
+                                                "recheck_report": "openai_final_premium_report_after_repair.json",
+                                            })
+                                            if ofp_now_passed:
+                                                logger.info(
+                                                    "OpenAI Final Premium Gate recheck: PASSED"
+                                                )
+                                            else:
+                                                status = "needs_human_review"
+                                                logger.warning(
+                                                    "OpenAI Final Premium Gate recheck: still FAILED"
+                                                )
+                                                warnings.append(
+                                                    f"OpenAI Final Premium Gate recheck FAILED "
+                                                    f"(overall_score="
+                                                    f"{ofp_recheck.get('overall_score', 0)}). "
+                                                    "Manual review required. "
+                                                    "See 04-review/"
+                                                    "openai_final_premium_report_after_repair.json."
+                                                )
+                                        except Exception as exc:
+                                            logger.error(
+                                                "OpenAI Final Premium Gate recheck failed: %s",
+                                                exc,
+                                            )
+                                            warnings.append(
+                                                f"OpenAI Final Premium Gate recheck failed: {exc}. "
+                                                "Manual review required."
+                                            )
+                                            openai_repair_has_failures = True
 
                                 except Exception as exc:
                                     logger.error("OpenAI targeted repair failed: %s", exc)
@@ -1925,6 +1939,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                     existing_ohe = _try_load_existing_json(
                         review_dir / "openai_premium_hindi_editor_report.json",
                         "openai_hindi_editor",
+                        episode_dir=episode_dir,
+                        prompt_check="openai_premium_hindi_editor",
                     )
                     if existing_ohe is not None:
                         ohe_report = existing_ohe
@@ -1984,6 +2000,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                     existing_oyr = _try_load_existing_json(
                         review_dir / "openai_originality_youtube_risk_report.json",
                         "openai_originality_risk",
+                        episode_dir=episode_dir,
+                        prompt_check="openai_originality_youtube_risk",
                     )
                     if existing_oyr is not None:
                         oyr_report = existing_oyr

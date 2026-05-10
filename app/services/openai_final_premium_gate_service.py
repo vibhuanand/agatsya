@@ -272,11 +272,12 @@ def run_openai_final_premium_gate(
             threshold_failures,
         )
     else:
-        # Python thresholds pass — honour Claude's own approved / safe_to_voice verdict
-        if not report.get("approved", False):
+        # Python thresholds pass — Python may only downgrade, NEVER upgrade.
+        # If OpenAI returned safe_to_voice=false, preserve it even when approved=true.
+        # If approved=false (OpenAI's own verdict), also force safe_to_voice=false.
+        if not report.get("approved", False) or not report.get("safe_to_voice", False):
             report["safe_to_voice"] = False
-        else:
-            report["safe_to_voice"] = True
+        # else: safe_to_voice remains True as OpenAI returned it.
 
     scores_log = {k: report.get(k, "?") for k in _THRESHOLDS}
     logger.info(

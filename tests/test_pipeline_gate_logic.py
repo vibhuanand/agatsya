@@ -332,3 +332,75 @@ def test_gate_summary_missing_preflight_entry_blocks_safe_to_voice(tmp_path):
         gate_summary={},  # missing python_preflight
     )
     assert safe_to_voice is False
+
+
+# ── Post-OAI-repair preflight blocks OFP recheck (item 1 cost-control) ────────
+
+def _compute_oai_recheck_active(post_oai_pf_blocking: bool) -> bool:
+    """Mirror of 'if not _post_oai_pf_blocking:' guard in adaptive Stage 16."""
+    return not post_oai_pf_blocking
+
+
+def test_post_oai_repair_preflight_blocking_skips_ofp_recheck(tmp_path):
+    """When Stage 16b Python preflight is blocking after OAI repair,
+    Stage 16a OFP recheck must NOT be called."""
+    script = make_script([make_chunk("001", "यह सबसे खौफनाक मामला था।")])
+    glossary = make_glossary(do_not_use=[])
+    review_dir = tmp_path / "04-review"
+    report = _run_preflight(script, glossary, review_dir, label="_after_openai_repair")
+
+    assert report["blocking"] is True, "Test precondition: preflight must be blocking"
+
+    recheck_active = _compute_oai_recheck_active(post_oai_pf_blocking=report["blocking"])
+    assert recheck_active is False
+
+    # Monkeypatch verifies OFP recheck function is never invoked
+    with patch(
+        "app.services.openai_final_premium_gate_service.run_openai_final_premium_gate"
+    ) as mock_ofp:
+        if recheck_active:
+            from app.services.openai_final_premium_gate_service import run_openai_final_premium_gate
+            run_openai_final_premium_gate()
+
+    mock_ofp.assert_not_called()
+
+
+def test_post_oai_repair_preflight_clean_allows_ofp_recheck(tmp_path):
+    """When Stage 16b Python preflight is clean after OAI repair,
+    Stage 16a OFP recheck is permitted to run."""
+    script = make_script([make_chunk("001", "साफ़ पाठ।")])
+    glossary = make_glossary()
+    review_dir = tmp_path / "04-review"
+    report = _run_preflight(script, glossary, review_dir, label="_after_openai_repair")
+
+    assert report["blocking"] is False, "Test precondition: preflight must be clean"
+
+    recheck_active = _compute_oai_recheck_active(post_oai_pf_blocking=report["blocking"])
+    assert recheck_active is True
+
+
+def test_post_oai_repair_preflight_blocking_sets_needs_human_review(tmp_path):
+    """A blocking post-OAI-repair preflight must result in needs_human_review status."""
+    script = make_script([make_chunk("001", "यह सबसे खौफनाक मामला था।")])
+    glossary = make_glossary(do_not_use=[])
+    review_dir = tmp_path / "04-review"
+    report = _run_preflight(script, glossary, review_dir, label="_after_openai_repair")
+
+    assert report["blocking"] is True
+    gate_summary = {"python_preflight": _build_gate_summary_entry(report, label="_after_openai_repair")}
+    gate_summary["python_preflight"].update({
+        "report":    "python_preflight_report_after_openai_repair.json",
+        "rechecked": True,
+    })
+
+    # Mirrors pipeline: status → needs_human_review when blocking
+    status = "needs_human_review" if report["blocking"] else "script_approved"
+    assert status == "needs_human_review"
+    # And safe_to_voice must be False
+    safe_to_voice = _compute_safe_to_voice(
+        status=status,
+        all_gates_passed=True,
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is False

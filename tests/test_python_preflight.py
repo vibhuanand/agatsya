@@ -559,3 +559,119 @@ def test_graphic_content_in_metadata_flagged(tmp_path):
     result = _run(script, glossary, tmp_path)
     meta_types = [i["type"] for i in result["metadata_issues"]]
     assert "graphic_content_metadata" in meta_types
+
+
+# ── Hindi YouTube-risk phrase coverage ───────────────────────────────────────
+
+def test_hindi_sensational_phrase_ruh_kampa_detected(tmp_path):
+    """'रूह कंपा देने वाला' must be flagged as youtube_safety_phrase (medium)."""
+    script = make_script([make_chunk("001", "यह रूह कंपा देने वाला मामला था।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "youtube_safety_phrase" in types
+
+
+def test_hindi_sensational_phrase_sachhai_pehli_bar_detected(tmp_path):
+    """'सच्चाई पहली बार' in narration must be flagged as youtube_safety_phrase."""
+    script = make_script([make_chunk("001", "सच्चाई पहली बार सामने आई।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "youtube_safety_phrase" in types
+
+
+def test_hindi_sensational_phrase_dekh_kar_kaamp_jaenge_detected(tmp_path):
+    """'देखकर कांप जाएंगे' must be flagged as youtube_safety_phrase."""
+    script = make_script([make_chunk("001", "देखकर कांप जाएंगे आप।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "youtube_safety_phrase" in types
+
+
+def test_hindi_unverified_claim_asli_awaaz_detected(tmp_path):
+    """'असली आवाज़' must be flagged as unverified_media_claim (high severity)."""
+    script = make_script([make_chunk("001", "यहाँ असली आवाज़ सुनिए।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "unverified_media_claim" in types
+    high_issues = [i for i in result["issues"] if i.get("severity") == "high"]
+    assert any(i["type"] == "unverified_media_claim" for i in high_issues)
+
+
+def test_hindi_unverified_claim_akhiri_shabd_detected(tmp_path):
+    """'आख़िरी शब्द' must be flagged as unverified_media_claim (high)."""
+    script = make_script([make_chunk("001", "यह उनके आख़िरी शब्द थे।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "unverified_media_claim" in types
+
+
+def test_hindi_unverified_claim_leek_video_detected(tmp_path):
+    """'लीक वीडियो' must be flagged as unverified_media_claim (high)."""
+    script = make_script([make_chunk("001", "यह लीक वीडियो देखिए।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "unverified_media_claim" in types
+
+
+def test_hindi_unverified_claim_camera_mein_qaid_detected(tmp_path):
+    """'कैमरे में कैद' must be flagged as unverified_media_claim (high)."""
+    script = make_script([make_chunk("001", "यह घटना कैमरे में कैद हो गई।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "unverified_media_claim" in types
+
+
+def test_hindi_graphic_khoon_se_lathpath_detected(tmp_path):
+    """'खून से लथपथ' must be flagged as graphic_content (high severity)."""
+    script = make_script([make_chunk("001", "शरीर खून से लथपथ था।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "graphic_content" in types
+    high_issues = [i for i in result["issues"] if i.get("severity") == "high"]
+    assert any(i["type"] == "graphic_content" for i in high_issues)
+
+
+def test_hindi_graphic_sharir_ke_tukde_detected(tmp_path):
+    """'शरीर के टुकड़े' must be flagged as graphic_content (high)."""
+    script = make_script([make_chunk("001", "पुलिस को शरीर के टुकड़े मिले।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "graphic_content" in types
+
+
+def test_hindi_graphic_daringagi_ki_hadd_detected(tmp_path):
+    """'दरिंदगी की हद' must be flagged as graphic_content (high)."""
+    script = make_script([make_chunk("001", "यह दरिंदगी की हद थी।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "graphic_content" in types
+
+
+def test_hindi_phrases_in_metadata_flagged(tmp_path):
+    """Hindi graphic/sensational phrases in metadata description must be detected."""
+    metadata = make_metadata()
+    metadata["description"] = metadata["description"] + " खून से लथपथ शरीर मिला।"
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    meta_types = [i["type"] for i in result["metadata_issues"]]
+    assert "graphic_content_metadata" in meta_types
+
+
+def test_hindi_unverified_claim_cctv_mein_qaid_detected(tmp_path):
+    """'CCTV में कैद' must be flagged as unverified_media_claim (high)."""
+    script = make_script([make_chunk("001", "यह CCTV में कैद हुआ।")])
+    glossary = make_glossary(do_not_use=[])
+    result = _run(script, glossary, tmp_path)
+    types = [i["type"] for i in result["issues"]]
+    assert "unverified_media_claim" in types

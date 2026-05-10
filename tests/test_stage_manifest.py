@@ -232,3 +232,92 @@ def test_inputs_changed_catches_tail_edit_beyond_old_truncation(tmp_path):
     # Edit at position 11000 — beyond old truncation point
     edited = base[:11_000] + "ब" + base[11_001:]
     assert inputs_changed(tmp_path, edited, _COST_MODE, _HINGLISH, _DURATION) is True
+
+
+# ── Newly tracked prompt stages ───────────────────────────────────────────────
+
+def test_prompt_changed_detects_hindi_copyedit_stage(tmp_path):
+    """'hindi_copyedit' is now tracked — prompt_changed must detect an edit."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "hindi_copyedit_gate_agent.txt"
+    prompt_file.write_text("original copyedit prompt", encoding="utf-8")
+    _save(tmp_path, prompts_dir=prompts_dir)
+    # Verify hash recorded
+    assert prompt_changed(tmp_path, "hindi_copyedit", prompts_dir) is False
+    # Edit the prompt
+    prompt_file.write_text("updated copyedit prompt with new rule", encoding="utf-8")
+    assert prompt_changed(tmp_path, "hindi_copyedit", prompts_dir) is True
+
+
+def test_prompt_changed_detects_originality_safety_stage(tmp_path):
+    """'originality_safety' is now tracked — prompt edit must be detected."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "originality_safety_gate_agent.txt"
+    prompt_file.write_text("original originality prompt", encoding="utf-8")
+    _save(tmp_path, prompts_dir=prompts_dir)
+    assert prompt_changed(tmp_path, "originality_safety", prompts_dir) is False
+    prompt_file.write_text("updated originality prompt", encoding="utf-8")
+    assert prompt_changed(tmp_path, "originality_safety", prompts_dir) is True
+
+
+def test_prompt_changed_detects_metadata_quality_stage(tmp_path):
+    """'metadata_quality' is now tracked — prompt edit must be detected."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "metadata_quality_gate_agent.txt"
+    prompt_file.write_text("original metadata quality prompt", encoding="utf-8")
+    _save(tmp_path, prompts_dir=prompts_dir)
+    assert prompt_changed(tmp_path, "metadata_quality", prompts_dir) is False
+    prompt_file.write_text("updated metadata quality prompt", encoding="utf-8")
+    assert prompt_changed(tmp_path, "metadata_quality", prompts_dir) is True
+
+
+def test_prompt_changed_detects_openai_premium_hindi_editor_stage(tmp_path):
+    """'openai_premium_hindi_editor' is now tracked — prompt edit must be detected."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "openai_premium_hindi_editor_gate.txt"
+    prompt_file.write_text("original ohe prompt", encoding="utf-8")
+    _save(tmp_path, prompts_dir=prompts_dir)
+    assert prompt_changed(tmp_path, "openai_premium_hindi_editor", prompts_dir) is False
+    prompt_file.write_text("updated ohe prompt with stricter rules", encoding="utf-8")
+    assert prompt_changed(tmp_path, "openai_premium_hindi_editor", prompts_dir) is True
+
+
+def test_prompt_changed_detects_retention_quality_stage(tmp_path):
+    """'retention_quality' is now tracked — prompt edit must be detected."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "retention_quality_gate_agent.txt"
+    prompt_file.write_text("original retention quality prompt", encoding="utf-8")
+    _save(tmp_path, prompts_dir=prompts_dir)
+    assert prompt_changed(tmp_path, "retention_quality", prompts_dir) is False
+    prompt_file.write_text("updated retention quality prompt", encoding="utf-8")
+    assert prompt_changed(tmp_path, "retention_quality", prompts_dir) is True
+
+
+def test_all_new_stages_tracked_in_manifest(tmp_path):
+    """All newly added stages appear in manifest prompt_hashes when prompt files exist."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    new_stages = {
+        "hindi_copyedit":                 "hindi_copyedit_gate_agent.txt",
+        "originality_safety":             "originality_safety_gate_agent.txt",
+        "recreated_dialogue":             "recreated_dialogue_quality_gate_agent.txt",
+        "metadata_quality":               "metadata_quality_gate_agent.txt",
+        "metadata_repair":                "metadata_repair_agent.txt",
+        "retention_quality":              "retention_quality_gate_agent.txt",
+        "targeted_chunk_repair":          "targeted_chunk_repair_agent.txt",
+        "openai_targeted_chunk_repair":   "openai_targeted_chunk_repair_agent.txt",
+        "openai_premium_hindi_editor":    "openai_premium_hindi_editor_gate.txt",
+        "openai_originality_youtube_risk": "openai_originality_youtube_risk_gate.txt",
+    }
+    for filename in new_stages.values():
+        (prompts_dir / filename).write_text(f"content of {filename}", encoding="utf-8")
+    manifest = _save(tmp_path, prompts_dir=prompts_dir)
+    for stage_key in new_stages:
+        assert stage_key in manifest["prompt_hashes"], (
+            f"Stage '{stage_key}' missing from manifest prompt_hashes"
+        )

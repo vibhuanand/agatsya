@@ -78,8 +78,18 @@ async def create_episode_package(inp: EpisodeInput) -> PackageResponse:
         if inp.package_level == "script_first":
             return run_agent_pipeline(inp)
         else:
-            # full_package: legacy single-call path (not recommended for 22+ min episodes)
-            return create_package(inp)
+            # Legacy single-call path (full_package / video_plan_only).
+            # Not voice-ready: no multi-gate review, no safe_to_voice guarantee.
+            # Force status=needs_human_review and safe_to_voice=False so the caller
+            # cannot accidentally treat this output as production-approved.
+            pkg = create_package(inp)
+            pkg.status = "needs_human_review"
+            pkg.safe_to_voice = False
+            pkg.warnings = list(pkg.warnings) + [
+                "Legacy single-call package path is not voice-ready. "
+                "Use package_level=script_first for the full quality-gate pipeline."
+            ]
+            return pkg
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:

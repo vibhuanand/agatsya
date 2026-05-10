@@ -15,15 +15,28 @@ logger = logging.getLogger(__name__)
 
 
 def run_full_pipeline(inp: FullPipelineInput) -> FullPipelineResponse:
+    # TODO (before enabling in production):
+    #   - Replace create_package() below with run_agent_pipeline() so the full
+    #     multi-gate quality pipeline runs before any voice/asset/render step.
+    #   - Block ElevenLabs (and all downstream steps) unless pkg.safe_to_voice=True.
+    #   - The safe_to_voice guard below enforces this at runtime already, but
+    #     create_package() never sets safe_to_voice=True (legacy path), so voice
+    #     generation is effectively always blocked until the TODO above is done.
     pipeline_warnings: list[str] = []
 
     # Step 1: package (always runs)
     pkg = create_package(inp)
     episode_dir = Path(pkg.episode_dir)
 
-    # Step 2: voice generation (optional)
+    # Step 2: voice generation (optional, guarded by safe_to_voice)
     voice_files: list[str] = []
-    if inp.enable_voice:
+    if inp.enable_voice and not pkg.safe_to_voice:
+        pipeline_warnings.append(
+            "Voice generation skipped: safe_to_voice=False. "
+            "Run POST /api/episodes/package with package_level=script_first and confirm "
+            "safe_to_voice=True before enabling voice generation."
+        )
+    elif inp.enable_voice:
         chunks_path = episode_dir / "02-package" / "elevenlabs_chunks.json"
         audio_dir = episode_dir / "03-audio"
         try:
