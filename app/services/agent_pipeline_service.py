@@ -1364,8 +1364,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         #                       if passes: skip legacy Stage 14/15; if fails with targets: repair once
         #   policy=always    → run Final Premium Gate + legacy Stage 14 + legacy Stage 15 (all 3)
         #                       all 3 must pass for safe_to_voice=True
-        #   policy=disabled  → skip all OpenAI gates (not blocking)
-        #   quality_mode != premium_final, or openai_review_enabled=false → all skipped
+        #   policy=disabled  → skip OpenAI calls, but output is NOT voice-ready
+        #   quality_mode != premium_final, or openai_review_enabled=false → not voice-ready
 
         _openai_gates_active = (
             settings.openai_review_enabled
@@ -1988,20 +1988,28 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                 else "OPENAI_REVIEW_ENABLED=false"
             )
             logger.info(
-                "OpenAI gates skipped (%s) — not blocking approval", _skip_reason
+                "OpenAI gates skipped (%s) — forcing needs_human_review", _skip_reason
             )
             gate_summary["openai_final_premium"] = {
-                "passed": True, "skipped": True,
-                "reason": f"{_skip_reason} — not blocking approval",
+                "passed": False, "skipped": True,
+                "reason": (
+                    f"{_skip_reason} — Final Premium Gate did not run, "
+                    "so safe_to_voice must remain false"
+                ),
             }
             gate_summary["openai_premium_hindi_editor"] = {
                 "passed": True, "skipped": True,
-                "reason": f"{_skip_reason} — not blocking approval",
+                "reason": f"{_skip_reason} — legacy gate skipped",
             }
             gate_summary["openai_originality_youtube_risk"] = {
                 "passed": True, "skipped": True,
-                "reason": f"{_skip_reason} — not blocking approval",
+                "reason": f"{_skip_reason} — legacy gate skipped",
             }
+            status = "needs_human_review"
+            warnings.append(
+                f"OpenAI Final Premium Gate skipped ({_skip_reason}). "
+                "safe_to_voice=False — do not run ElevenLabs until the final premium gate passes."
+            )
 
         # ── Final gate summary + safe_to_voice ────────────────────────────────
         # all_gates_passed checks every content gate entry currently in gate_summary.

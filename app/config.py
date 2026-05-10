@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -88,6 +89,24 @@ class Settings(BaseSettings):
     # App
     app_env: str = "development"
     log_level: str = "INFO"
+
+    @field_validator("quality_mode")
+    @classmethod
+    def validate_quality_mode(cls, value: str) -> str:
+        allowed = {"premium_build", "premium_final", "premium_batch"}
+        if value not in allowed:
+            raise ValueError(f"QUALITY_MODE must be one of {sorted(allowed)}, got {value!r}")
+        return value
+
+    @field_validator("openai_review_policy")
+    @classmethod
+    def validate_openai_review_policy(cls, value: str) -> str:
+        allowed = {"adaptive", "always", "disabled"}
+        if value not in allowed:
+            raise ValueError(
+                f"OPENAI_REVIEW_POLICY must be one of {sorted(allowed)}, got {value!r}"
+            )
+        return value
 
     class Config:
         env_file = ".env"

@@ -40,9 +40,9 @@ SUBSCRIBER CONVERSION
 • Is the subscriber invitation (if any) at a high-engagement moment, not mid-exposition?
 
 RETENTION BLUEPRINT ALIGNMENT
-• Does the script follow the opening_hook_strategy?
+• Does the script follow the opening_hook and central_question from the retention blueprint?
 • Are re_engagement_moments present in the chunks that correspond to those minutes?
-• Do pattern_interrupts appear in the right sections?
+• Do retention beats create useful curiosity gaps, emotional anchors, and payoffs in the right sections?
 • Does the ending follow ending_strategy?
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
