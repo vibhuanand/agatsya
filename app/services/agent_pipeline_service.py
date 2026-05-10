@@ -1039,6 +1039,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         script_dir=script_dir,
                         review_dir=review_dir,
                     )
+                    _ran_any_repair = True
                     copyedit_repair_has_failures = copyedit_repair_report.get("has_failures", False)
                     if copyedit_repair_has_failures:
                         failed_n = copyedit_repair_report.get("chunks_failed", 0)
@@ -1402,6 +1403,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                             script_dir=script_dir,
                             review_dir=review_dir,
                         )
+                        _ran_any_repair = True
                         retention_repair_has_failures = retention_repair_report.get(
                             "has_failures", False
                         )
@@ -1855,6 +1857,53 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                         )
                                         openai_repair_has_failures = True
 
+                                    # ── Stage 16b: Python preflight after OAI repair ──
+                                    # Guard: OAI repair must not introduce new safety issues.
+                                    logger.info(
+                                        "Stage 16b — Python Preflight recheck after OpenAI repair"
+                                    )
+                                    try:
+                                        _post_oai_pf = run_python_preflight(
+                                            script_draft=script_final,
+                                            fact_lock=fact_lock,
+                                            case_glossary=case_glossary,
+                                            review_dir=review_dir,
+                                            target_duration_min=inp.target_duration_min,
+                                            hinglish_level=inp.hinglish_level,
+                                            label="_after_openai_repair",
+                                        )
+                                        if _post_oai_pf.get("blocking", False):
+                                            _po_counts = _post_oai_pf.get("severity_counts", {})
+                                            status = "needs_human_review"
+                                            gate_summary["python_preflight"].update({
+                                                "passed":    False,
+                                                "blocking":  True,
+                                                "high":      _po_counts.get("high", 0),
+                                                "medium":    _po_counts.get("medium", 0),
+                                                "low":       _po_counts.get("low", 0),
+                                                "report":    "python_preflight_report_after_openai_repair.json",
+                                                "rechecked": True,
+                                            })
+                                            warnings.append(
+                                                "Post-OpenAI-repair Python preflight is BLOCKING. "
+                                                "safe_to_voice=False. "
+                                                "See 04-review/python_preflight_report_after_openai_repair.json."
+                                            )
+                                            logger.warning(
+                                                "Stage 16b — Python preflight BLOCKING after OAI repair "
+                                                "(high=%d, medium=%d).",
+                                                _po_counts.get("high", 0),
+                                                _po_counts.get("medium", 0),
+                                            )
+                                    except Exception as exc:
+                                        logger.error(
+                                            "Python preflight after OAI repair failed: %s", exc
+                                        )
+                                        warnings.append(
+                                            f"Python preflight after OpenAI repair failed: {exc}. "
+                                            "Manual review required."
+                                        )
+
                                 except Exception as exc:
                                     logger.error("OpenAI targeted repair failed: %s", exc)
                                     warnings.append(
@@ -2147,6 +2196,52 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                 f"OpenAI originality/YT risk recheck failed: {exc}."
                                             )
                                             openai_repair_has_failures = True
+
+                                    # ── Stage 16c: Python preflight after OAI repair (always mode) ──
+                                    logger.info(
+                                        "Stage 16c — Python Preflight recheck after OpenAI repair"
+                                    )
+                                    try:
+                                        _post_oai_pf_a = run_python_preflight(
+                                            script_draft=script_final,
+                                            fact_lock=fact_lock,
+                                            case_glossary=case_glossary,
+                                            review_dir=review_dir,
+                                            target_duration_min=inp.target_duration_min,
+                                            hinglish_level=inp.hinglish_level,
+                                            label="_after_openai_repair",
+                                        )
+                                        if _post_oai_pf_a.get("blocking", False):
+                                            _poa_counts = _post_oai_pf_a.get("severity_counts", {})
+                                            status = "needs_human_review"
+                                            gate_summary["python_preflight"].update({
+                                                "passed":    False,
+                                                "blocking":  True,
+                                                "high":      _poa_counts.get("high", 0),
+                                                "medium":    _poa_counts.get("medium", 0),
+                                                "low":       _poa_counts.get("low", 0),
+                                                "report":    "python_preflight_report_after_openai_repair.json",
+                                                "rechecked": True,
+                                            })
+                                            warnings.append(
+                                                "Post-OpenAI-repair Python preflight is BLOCKING. "
+                                                "safe_to_voice=False. "
+                                                "See 04-review/python_preflight_report_after_openai_repair.json."
+                                            )
+                                            logger.warning(
+                                                "Stage 16c — Python preflight BLOCKING after OAI repair "
+                                                "(high=%d, medium=%d).",
+                                                _poa_counts.get("high", 0),
+                                                _poa_counts.get("medium", 0),
+                                            )
+                                    except Exception as exc:
+                                        logger.error(
+                                            "Python preflight after OAI repair failed: %s", exc
+                                        )
+                                        warnings.append(
+                                            f"Python preflight after OpenAI repair failed: {exc}. "
+                                            "Manual review required."
+                                        )
 
                                 except Exception as exc:
                                     logger.error("OpenAI targeted repair failed: %s", exc)
