@@ -1148,7 +1148,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             logger.error("Script repair failed: %s", exc)
             warnings.append(
                 f"Script repair failed: {exc}. "
-                "Draft promoted as final. Auto-retry exhausted — manual review required."
+                "Draft promoted as final. Automated retry exhausted — safe_to_voice=false."
             )
             script_final = promote_draft_as_final(script_draft, script_dir)
             status = "not_voice_ready_auto_retry_exhausted"
@@ -1265,7 +1265,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             except Exception as exc:
                 logger.error("Hindi copyedit gate failed: %s", exc)
                 warnings.append(
-                    f"Hindi copyedit gate failed: {exc}. Manual review required."
+                    f"Hindi copyedit gate call failed: {exc}. "
+                    "No repair targets available — gate marked failed."
                 )
                 copyedit_report = {
                     "approved": False, "score": 0, "error": str(exc),
@@ -1294,7 +1295,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         failed_n = copyedit_repair_report.get("chunks_failed", 0)
                         warnings.append(
                             f"Copyedit repair: {failed_n} chunk(s) failed — "
-                            "original content kept. Manual review required."
+                            "original content kept. Automated retry exhausted — safe_to_voice=false."
                         )
 
                     # ── Stage 9b: Re-run lint + copyedit gate (once) ──────────
@@ -1393,7 +1394,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             except Exception as exc:
                 logger.error("Originality gate failed: %s", exc)
                 warnings.append(
-                    f"Originality safety gate failed: {exc}. Manual review required."
+                    f"Originality safety gate call failed: {exc}. "
+                    "Gate marked failed — auto-rebuild will be attempted by OFP gate."
                 )
                 originality_report = {"gate_passed": False, "error": str(exc)}
 
@@ -1433,7 +1435,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             except Exception as exc:
                 logger.error("Dialogue gate failed: %s", exc)
                 warnings.append(
-                    f"Recreated dialogue quality gate failed: {exc}. Manual review required."
+                    f"Recreated dialogue quality gate call failed: {exc}. "
+                    "Gate marked failed — auto-rebuild will be attempted by OFP gate."
                 )
                 dialogue_report = {"gate_passed": False, "error": str(exc)}
 
@@ -1488,7 +1491,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             except Exception as exc:
                 logger.error("Metadata gate failed: %s", exc)
                 warnings.append(
-                    f"Metadata quality gate failed: {exc}. Manual review required."
+                    f"Metadata quality gate call failed: {exc}. "
+                    "Gate marked failed — auto-rebuild will be attempted by OFP gate."
                 )
                 metadata_report = {"gate_passed": False, "error": str(exc)}
 
@@ -1498,9 +1502,10 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         except ValueError as exc:
             logger.warning("Metadata Quality Report schema validation (non-fatal): %s", exc)
             warnings.append(
-                f"Metadata Quality Report schema mismatch (non-fatal). "
-                "Results may be unreliable — see 04-review/_metadata_quality_validation_error.txt. "
-                "Status set to needs_human_review."
+                "Metadata Quality Report schema mismatch — gate results unreliable. "
+                "See 04-review/_metadata_quality_validation_error.txt. "
+                "Pipeline cannot auto-repair without a valid gate report; "
+                "re-run with REUSE_EXISTING_STAGE_OUTPUTS=false."
             )
             status = "needs_human_review"
 
@@ -1635,9 +1640,10 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             except ValueError as exc:
                 logger.warning("Retention Quality Report schema validation (non-fatal): %s", exc)
                 warnings.append(
-                    f"Retention Quality Report schema mismatch (non-fatal). "
-                    "Results may be unreliable — see 04-review/_retention_quality_validation_error.txt. "
-                    "Status set to needs_human_review."
+                    "Retention Quality Report schema mismatch — gate results unreliable. "
+                    "See 04-review/_retention_quality_validation_error.txt. "
+                    "Pipeline cannot auto-repair without a valid gate report; "
+                    "re-run with REUSE_EXISTING_STAGE_OUTPUTS=false."
                 )
                 status = "needs_human_review"
 
@@ -1910,8 +1916,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                     except Exception as exc:
                         logger.error("OpenAI Final Premium Gate failed: %s", exc)
                         warnings.append(
-                            f"OpenAI Final Premium Gate failed: {exc}. "
-                            "safe_to_voice=False — manual review required."
+                            f"OpenAI Final Premium Gate call failed: {exc}. "
+                            "safe_to_voice=False — re-run with REUSE_EXISTING_STAGE_OUTPUTS=false to retry."
                         )
                         ofp_report = {
                             "approved": False, "safe_to_voice": False,
@@ -2074,8 +2080,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                             warnings.append(
                                                 f"OFP recheck after auto-rebuild FAILED "
                                                 f"(overall_score="
-                                                f"{ofp_rebuild_recheck.get('overall_score', 0)}). "
-                                                "Manual review required."
+                                                f"{ofp_rebuild_recheck.get('overall_score', 0)}) — "
+                                                "automated retry exhausted — safe_to_voice=false."
                                             )
                                     except Exception as exc:
                                         logger.error(
@@ -2084,7 +2090,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                         status = "not_voice_ready_auto_retry_exhausted"
                                         openai_repair_has_failures = True
                                         warnings.append(
-                                            f"OFP recheck after auto-rebuild failed: {exc}."
+                                            f"OFP recheck after auto-rebuild failed: {exc}. "
+                                            "Automated retry exhausted — safe_to_voice=false."
                                         )
                             else:
                                 logger.info(
@@ -2110,7 +2117,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                         failed_n = oai_repair_report.get("chunks_failed", 0)
                                         warnings.append(
                                             f"OpenAI targeted repair: {failed_n} chunk(s) failed — "
-                                            "original content kept. Manual review required."
+                                            "original content kept. "
+                                            "Automated retry exhausted — safe_to_voice=false."
                                         )
 
                                     # ── Stage 16b: Python preflight (pre-recheck guard) ──
@@ -2284,7 +2292,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                     f"OpenAI Final Premium Gate recheck FAILED "
                                                     f"(overall_score="
                                                     f"{ofp_recheck.get('overall_score', 0)}) — "
-                                                    "auto-retry exhausted. Manual review required. "
+                                                    "automated retry exhausted — safe_to_voice=false. "
                                                     "See 04-review/"
                                                     "openai_final_premium_report_after_repair.json."
                                                 )
@@ -2294,16 +2302,16 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                 exc,
                                             )
                                             warnings.append(
-                                                f"OpenAI Final Premium Gate recheck failed: {exc}. "
-                                                "Manual review required."
+                                                f"OpenAI Final Premium Gate recheck call failed: {exc}. "
+                                                "Automated retry exhausted — safe_to_voice=false."
                                             )
                                             openai_repair_has_failures = True
 
                                 except Exception as exc:
                                     logger.error("OpenAI targeted repair failed: %s", exc)
                                     warnings.append(
-                                        f"OpenAI targeted chunk repair failed: {exc}. "
-                                        "Manual review required — do not run ElevenLabs."
+                                        f"OpenAI targeted chunk repair call failed: {exc}. "
+                                        "Automated retry exhausted — do not run ElevenLabs."
                                     )
                                     openai_repair_has_failures = True
 
@@ -2340,8 +2348,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         except Exception as exc:
                             logger.error("OpenAI Hindi editor gate failed: %s", exc)
                             warnings.append(
-                                f"OpenAI Premium Hindi Editor Gate failed: {exc}. "
-                                "safe_to_voice=False — manual review required."
+                                f"OpenAI Premium Hindi Editor Gate call failed: {exc}. "
+                                "Gate marked failed — auto-rebuild will be attempted in Stage 16."
                             )
                             ohe_report = {
                                 "approved": False, "safe_to_voice": False,
@@ -2405,8 +2413,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         except Exception as exc:
                             logger.error("OpenAI originality/risk gate failed: %s", exc)
                             warnings.append(
-                                f"OpenAI Originality/YouTube Risk Gate failed: {exc}. "
-                                "safe_to_voice=False — manual review required."
+                                f"OpenAI Originality/YouTube Risk Gate call failed: {exc}. "
+                                "Gate marked failed — auto-rebuild will be attempted in Stage 16."
                             )
                             oyr_report = {
                                 "approved": False, "safe_to_voice": False,
@@ -2639,8 +2647,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                             warnings.append(
                                                 f"OFP recheck after auto-rebuild FAILED "
                                                 f"(overall_score="
-                                                f"{ofp_rb_recheck.get('overall_score', 0)}). "
-                                                "Manual review required."
+                                                f"{ofp_rb_recheck.get('overall_score', 0)}) — "
+                                                "automated retry exhausted — safe_to_voice=false."
                                             )
                                     except Exception as exc:
                                         logger.error(
@@ -2649,7 +2657,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                         status = "not_voice_ready_auto_retry_exhausted"
                                         openai_repair_has_failures = True
                                         warnings.append(
-                                            f"OFP recheck after auto-rebuild (always mode) failed: {exc}."
+                                            f"OFP recheck after auto-rebuild (always mode) call failed: {exc}. "
+                                            "Automated retry exhausted — safe_to_voice=false."
                                         )
                             else:
                                 logger.info(
@@ -2675,7 +2684,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                         failed_n = oai_repair_report.get("chunks_failed", 0)
                                         warnings.append(
                                             f"OpenAI targeted repair: {failed_n} chunk(s) failed — "
-                                            "original content kept. Manual review required."
+                                            "original content kept. "
+                                            "Automated retry exhausted — safe_to_voice=false."
                                         )
 
                                     # Recheck all failed gates after repair
@@ -2705,8 +2715,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                 status = "not_voice_ready_auto_retry_exhausted"
                                                 warnings.append(
                                                     f"OpenAI Hindi editor recheck FAILED after targeted repair "
-                                                    f"(overall_score={ohe_recheck.get('overall_score', 0)}). "
-                                                    "Auto-retry exhausted — manual review required."
+                                                    f"(overall_score={ohe_recheck.get('overall_score', 0)}) — "
+                                                    "automated retry exhausted — safe_to_voice=false."
                                                 )
                                         except Exception as exc:
                                             logger.error(
@@ -2751,7 +2761,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                     "Required fixes: "
                                                     + (safe_join_report_items(fixes_r, limit=3) if fixes_r else "see report")
                                                     + (f" (+{len(fixes_r)-3} more)" if len(fixes_r) > 3 else "")
-                                                    + " — Auto-retry exhausted."
+                                                    + " — automated retry exhausted — safe_to_voice=false."
                                                 )
                                         except Exception as exc:
                                             logger.error(
@@ -2822,8 +2832,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                 except Exception as exc:
                                     logger.error("OpenAI targeted repair failed: %s", exc)
                                     warnings.append(
-                                        f"OpenAI targeted chunk repair failed: {exc}. "
-                                        "Manual review required — do not run ElevenLabs."
+                                        f"OpenAI targeted chunk repair call failed: {exc}. "
+                                        "Automated retry exhausted — do not run ElevenLabs."
                                     )
                                     openai_repair_has_failures = True
 
@@ -3031,7 +3041,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         if copyedit_repair_has_failures and not any("Copyedit repair had failures" in w for w in warnings):
             warnings.append(
                 "Copyedit repair had failures — original content kept in affected chunks. "
-                "Do not run ElevenLabs. Auto-retry exhausted — manual review required. "
+                "Do not run ElevenLabs. Automated retry exhausted — safe_to_voice=false. "
                 "See 04-review/hindi_copyedit_repair_report.json."
             )
             status = "not_voice_ready_auto_retry_exhausted"
