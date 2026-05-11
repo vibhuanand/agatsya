@@ -85,14 +85,18 @@ originality_score (0–10, HIGHER IS BETTER — metadata does not copy other cre
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLICKBAIT AND DIGNITY RULES — ZERO TOLERANCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Flag any title or description that:
+Flag any title, tag, thumbnail, or description that:
 • Uses "भारत की पहली", "सबसे भयानक", "आप यकीन नहीं करेंगे", or similar unverified superlatives
+• Uses "most infamous", "most shocking", "most brutal", "सबसे कुख्यात", "सबसे डरावना"
 • Uses "SHOCKING", "EXPOSED", "REVEALED" or Hindi equivalents ("चौंकाने वाला", "हैरान कर देगा")
 • Makes a factual superlative claim (e.g. "India's most brutal case") without fact_lock verification
+• Implies legal culpability not established in court: "मीडिया का गुनाह", "journalism killed her",
+  "media killed her", "media's fault" — flag as required_fix, severity=high
 • Thumbnail text is more than 5 words
 • Thumbnail text includes graphic injury, victim suffering, or child-related horror language
 • Description opens with a sensational teaser rather than factual context
 • Tags include the victim's personal information (address, phone, family private details)
+• For child-victim cases: organ-specific injury wording in any metadata field → high-severity gate failure
 
 These are automatic gate failures regardless of scores — add them to required_fixes.
 

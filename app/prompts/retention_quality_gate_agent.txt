@@ -133,8 +133,19 @@ EVALUATION INSTRUCTIONS
 3. For each issue: identify the specific chunk_id, what is weak, and exactly how to fix it.
 4. chunk_repair_targets: for chunks that can be improved with targeted rewrite (not full script).
    Include repair_instruction that is specific enough for a writer to act on without additional context.
+   IMPORTANT: Group related retention issues into section-level targets where possible.
+   Prefer 1 section-level target over 5 individual chunk targets for pacing/transition issues.
 5. Do NOT flag issues that other gates cover (grammar, facts, originality).
 6. Be strict — a premium production must hold a viewer who has many alternatives.
+7. RETENTION MUST NOT DEPEND ON GRAPHIC DETAILS. Build retention using:
+   - Unanswered institutional questions (why did authorities fail?)
+   - Media pressure and public outrage timeline
+   - Failed handovers and investigative tension
+   - Public trust collapse and moral stakes
+   - Reform aftermath and systemic change
+   - If retention is weak, add a re-engagement curiosity line suggestion every 2–3 chunks.
+8. For child-victim cases: if a chunk uses graphic injury as a hook or curiosity device, flag it
+   as a HIGH-severity retention repair target with instruction to replace with institutional tension.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT — RETURN ONLY THIS JSON OBJECT

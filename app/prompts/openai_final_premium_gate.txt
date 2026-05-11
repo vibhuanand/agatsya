@@ -60,6 +60,16 @@ EVALUATION DIMENSIONS
    - Tags: relevant, no keyword-stuffing, no trending-unrelated tags
    - Description: no offensive language, no misinformation, accurate episode summary
    - No titles referencing graphic crime details or sexualizing victims
+   CHILD-VICTIM / METADATA LEGAL-BLAME CHECKS (flag as chunk_repair_target if found):
+   - "most infamous", "सबसे कुख्यात", "most shocking", "most brutal" in title/tags/thumbnail → HIGH issue
+   - "मीडिया का गुनाह", "journalism killed her", "media killed her" → HIGH issue (legal-blame)
+   - "Taiwan most infamous case" tag → flag; replace with "Pai Hsiao-Yen case", "Taiwan 1997"
+   - Organ-specific injury wording in title/thumbnail/description → HIGH issue
+   CHILD-VICTIM NARRATION CHECKS (flag as chunk_repair_target if found):
+   - Stacked graphic forensic details in one chunk (organ name + mutilation + severed detail) → HIGH
+   - "फटा हुआ जिगर" or "ruptured liver" anywhere → HIGH issue; must be "गंभीर आंतरिक चोटें"
+   - Cause of death mentioned more than once graphically → HIGH issue
+   - Body injury used as hook, curiosity gap, or retention device → HIGH issue
 
 6. METADATA COMPLETENESS (metadata_score)
    Context from claude_gate_evidence: metadata_quality (scores, required_fixes)

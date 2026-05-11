@@ -94,6 +94,9 @@ from app.services.report_normalization_service import (
     safe_join_report_items,
     stringify_report_list,
 )
+from app.services.repair_routing_service import run_repair_routing
+from app.services.deterministic_auto_fix_service import run_deterministic_auto_fix
+from app.services.premium_section_rebuild_service import run_premium_section_rebuild
 
 logger = logging.getLogger(__name__)
 
@@ -458,6 +461,114 @@ def _collect_pipeline_files(episode_dir: Path) -> dict[str, str]:
                 if f.is_file():
                     files[f"{folder}/{f.name}"] = str(f)
     return files
+
+
+# ─── Shared repair-routing + rebuild helper ───────────────────────────────────
+
+def _run_routing_and_rebuild(
+    script_draft: dict,
+    gate_reports: dict[str, dict],
+    fact_lock: dict,
+    blueprint: dict,
+    retention_blueprint: dict,
+    originality_transformation_plan: dict,
+    case_glossary: dict,
+    hinglish_level: int,
+    case_hint: str,
+    review_dir: Path,
+    script_dir: Path,
+    warnings: list[str],
+    gate_summary: dict,
+) -> tuple[dict, dict, bool]:
+    """
+    Step 1: Run repair_routing_service to classify gate failures into root causes.
+    Step 2: Run deterministic_auto_fix_service (zero AI cost).
+    Step 3: Run premium_section_rebuild_service (one Claude call per root-cause group).
+
+    Returns
+    -------
+    (updated_script_draft, routing_plan, rebuild_ran)
+
+    ``rebuild_ran`` is True iff Claude section rebuild actually executed.
+    The caller is responsible for re-running gate checks after this.
+    """
+    # ── Step 1: Repair routing ────────────────────────────────────────────────
+    routing_plan: dict = {"route": "stop_not_voice_ready"}
+    try:
+        routing_plan = run_repair_routing(
+            all_gate_reports=gate_reports,
+            openai_repair_max_chunks=settings.openai_repair_max_chunks,
+            review_dir=review_dir,
+        )
+        _route = routing_plan.get("route", "stop_not_voice_ready")
+        logger.info(
+            "Repair routing: route=%s root_causes=%d python_fixes=%d claude_targets=%d",
+            _route,
+            len(routing_plan.get("root_causes", [])),
+            len(routing_plan.get("python_fixes", [])),
+            len(routing_plan.get("claude_repair_targets", [])),
+        )
+        gate_summary["repair_routing"] = {
+            "route":               _route,
+            "root_cause_count":    len(routing_plan.get("root_causes", [])),
+            "python_fixes_count":  len(routing_plan.get("python_fixes", [])),
+            "claude_targets_count": len(routing_plan.get("claude_repair_targets", [])),
+        }
+    except Exception as _exc:
+        logger.error("Repair routing failed: %s", _exc)
+        warnings.append(f"Repair routing failed: {_exc}.")
+        gate_summary["repair_routing"] = {"route": "stop_not_voice_ready", "error": str(_exc)}
+        return script_draft, routing_plan, False
+
+    if routing_plan.get("route") == "stop_not_voice_ready":
+        warnings.append(
+            "Repair routing: unrecoverable issues detected — manual review required."
+        )
+        return script_draft, routing_plan, False
+
+    # ── Step 2: Deterministic auto-fix ────────────────────────────────────────
+    try:
+        script_draft, _af_report = run_deterministic_auto_fix(
+            script_draft=script_draft,
+            routing_plan=routing_plan,
+            case_hint=case_hint,
+            review_dir=review_dir,
+        )
+        _fix_n = _af_report.get("total_fixes_applied", 0)
+        logger.info("Deterministic auto-fix: %d fix(es) applied", _fix_n)
+        gate_summary.setdefault("auto_fix", {})["python_fixes_count"] = _fix_n
+    except Exception as _exc:
+        logger.error("Deterministic auto-fix failed: %s", _exc)
+        warnings.append(f"Deterministic auto-fix failed: {_exc}.")
+
+    # ── Step 3: Claude grouped rebuild ────────────────────────────────────────
+    rebuild_ran = False
+    if settings.auto_rebuild_enabled and routing_plan.get("claude_repair_targets"):
+        try:
+            script_draft, _rebuild_report = run_premium_section_rebuild(
+                script_draft=script_draft,
+                routing_plan=routing_plan,
+                fact_lock=fact_lock,
+                blueprint=blueprint,
+                retention_blueprint=retention_blueprint,
+                originality_transformation_plan=originality_transformation_plan,
+                case_glossary=case_glossary,
+                hinglish_level=hinglish_level,
+                review_dir=review_dir,
+                script_dir=script_dir,
+            )
+            rebuild_ran = True
+            _rebuilt_n = _rebuild_report.get("rebuilt_count", 0)
+            logger.info("Premium section rebuild: %d chunk(s) rebuilt", _rebuilt_n)
+            gate_summary.setdefault("auto_fix", {}).update({
+                "rebuild_ran":    True,
+                "rebuild_chunks": _rebuilt_n,
+            })
+        except Exception as _exc:
+            logger.error("Premium section rebuild failed: %s", _exc)
+            warnings.append(f"Premium section rebuild failed: {_exc}.")
+
+    return script_draft, routing_plan, rebuild_ran
 
 
 # ─── Main pipeline entry point ────────────────────────────────────────────────
@@ -1821,17 +1932,100 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         if ofp_targets:
                             if len(ofp_targets) > settings.openai_repair_max_chunks:
                                 logger.warning(
-                                    "Stage 16 — Too many OpenAI repair targets (%d > %d). "
-                                    "Skipping repair, setting needs_human_review.",
+                                    "Stage 16 — %d targets exceed openai_repair_max_chunks=%d. "
+                                    "Routing to auto-rebuild flow (adaptive mode).",
                                     len(ofp_targets), settings.openai_repair_max_chunks,
                                 )
-                                warnings.append(
-                                    f"Too many OpenAI Final Premium repair targets "
-                                    f"({len(ofp_targets)} > {settings.openai_repair_max_chunks}). "
-                                    "Manual review required — do not run ElevenLabs."
+                                status = "auto_rebuild_required"
+                                _rr_reports = {
+                                    "openai_final_premium": ofp_report,
+                                    "copyedit":             copyedit_report,
+                                    "script_quality":       quality_report,
+                                    "retention":            retention_report,
+                                    "originality_safety":   originality_report,
+                                    "recreated_dialogue":   dialogue_report,
+                                    "metadata":             metadata_report,
+                                }
+                                script_final, _routing_plan, _rebuild_ran = (
+                                    _run_routing_and_rebuild(
+                                        script_draft=script_final,
+                                        gate_reports=_rr_reports,
+                                        fact_lock=fact_lock,
+                                        blueprint=blueprint,
+                                        retention_blueprint=retention_blueprint,
+                                        originality_transformation_plan=originality_transformation_plan or {},
+                                        case_glossary=case_glossary,
+                                        hinglish_level=inp.hinglish_level,
+                                        case_hint=getattr(inp, "case_hint", ""),
+                                        review_dir=review_dir,
+                                        script_dir=script_dir,
+                                        warnings=warnings,
+                                        gate_summary=gate_summary,
+                                    )
                                 )
-                                openai_repair_has_failures = True
-                                status = "needs_human_review"
+                                if _routing_plan.get("route") == "stop_not_voice_ready":
+                                    status = "not_voice_ready_auto_retry_exhausted"
+                                    openai_repair_has_failures = True
+                                else:
+                                    # Refresh lint then recheck OFP once
+                                    try:
+                                        lint_report = run_hindi_text_lint(
+                                            script_final,
+                                            hinglish_level=inp.hinglish_level,
+                                        )
+                                        ofp_rebuild_recheck = run_openai_final_premium_gate(
+                                            script_draft=script_final,
+                                            fact_lock=fact_lock,
+                                            blueprint=blueprint,
+                                            hinglish_level=inp.hinglish_level,
+                                            lint_report=lint_report,
+                                            copyedit_report=copyedit_report,
+                                            quality_report=quality_report,
+                                            retention_report=retention_report,
+                                            similarity_report=similarity_report,
+                                            originality_report=originality_report,
+                                            dialogue_report=dialogue_report,
+                                            metadata_report=metadata_report,
+                                            review_dir=review_dir,
+                                            label="_after_auto_rebuild",
+                                            transformation_plan=originality_transformation_plan or None,
+                                        )
+                                        ofp_report = ofp_rebuild_recheck
+                                        _ofp_rebuild_passed = (
+                                            ofp_rebuild_recheck.get("approved", False)
+                                            and ofp_rebuild_recheck.get("safe_to_voice", False)
+                                        )
+                                        gate_summary["openai_final_premium"].update({
+                                            "passed":        _ofp_rebuild_passed,
+                                            "approved":      ofp_rebuild_recheck.get("approved", False),
+                                            "safe_to_voice": ofp_rebuild_recheck.get("safe_to_voice", False),
+                                            "overall_score": ofp_rebuild_recheck.get("overall_score", 0),
+                                            "recheck":       True,
+                                            "recheck_label": "_after_auto_rebuild",
+                                        })
+                                        if _ofp_rebuild_passed:
+                                            status = "script_approved"
+                                            logger.info(
+                                                "Stage 16 adaptive — OFP recheck after auto-rebuild: PASSED"
+                                            )
+                                        else:
+                                            status = "not_voice_ready_auto_retry_exhausted"
+                                            openai_repair_has_failures = True
+                                            warnings.append(
+                                                f"OFP recheck after auto-rebuild FAILED "
+                                                f"(overall_score="
+                                                f"{ofp_rebuild_recheck.get('overall_score', 0)}). "
+                                                "Manual review required."
+                                            )
+                                    except Exception as exc:
+                                        logger.error(
+                                            "OFP recheck after auto-rebuild failed: %s", exc
+                                        )
+                                        status = "not_voice_ready_auto_retry_exhausted"
+                                        openai_repair_has_failures = True
+                                        warnings.append(
+                                            f"OFP recheck after auto-rebuild failed: {exc}."
+                                        )
                             else:
                                 logger.info(
                                     "Stage 16 — OpenAI Targeted Chunk Repair (%d target(s))",
@@ -2221,17 +2415,180 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         if all_oai_targets:
                             if len(all_oai_targets) > settings.openai_repair_max_chunks:
                                 logger.warning(
-                                    "Stage 16 — Too many OpenAI repair targets (%d > %d). "
-                                    "Skipping repair, setting needs_human_review.",
+                                    "Stage 16 — %d targets exceed openai_repair_max_chunks=%d. "
+                                    "Routing to auto-rebuild flow (always mode).",
                                     len(all_oai_targets), settings.openai_repair_max_chunks,
                                 )
-                                warnings.append(
-                                    f"Too many OpenAI repair targets "
-                                    f"({len(all_oai_targets)} > {settings.openai_repair_max_chunks}). "
-                                    "Manual review required — do not run ElevenLabs."
+                                status = "auto_rebuild_required"
+                                _rr_reports_always = {
+                                    "openai_final_premium":           ofp_report,
+                                    "openai_premium_hindi_editor":    ohe_report,
+                                    "openai_originality_youtube_risk": oyr_report,
+                                    "copyedit":                       copyedit_report,
+                                    "script_quality":                 quality_report,
+                                    "retention":                      retention_report,
+                                    "originality_safety":             originality_report,
+                                    "recreated_dialogue":             dialogue_report,
+                                    "metadata":                       metadata_report,
+                                }
+                                script_final, _routing_plan_always, _rebuild_ran_always = (
+                                    _run_routing_and_rebuild(
+                                        script_draft=script_final,
+                                        gate_reports=_rr_reports_always,
+                                        fact_lock=fact_lock,
+                                        blueprint=blueprint,
+                                        retention_blueprint=retention_blueprint,
+                                        originality_transformation_plan=originality_transformation_plan or {},
+                                        case_glossary=case_glossary,
+                                        hinglish_level=inp.hinglish_level,
+                                        case_hint=getattr(inp, "case_hint", ""),
+                                        review_dir=review_dir,
+                                        script_dir=script_dir,
+                                        warnings=warnings,
+                                        gate_summary=gate_summary,
+                                    )
                                 )
-                                openai_repair_has_failures = True
-                                status = "needs_human_review"
+                                if _routing_plan_always.get("route") == "stop_not_voice_ready":
+                                    status = "not_voice_ready_auto_retry_exhausted"
+                                    openai_repair_has_failures = True
+                                else:
+                                    # Refresh lint then recheck all failing gates once
+                                    try:
+                                        lint_report = run_hindi_text_lint(
+                                            script_final,
+                                            hinglish_level=inp.hinglish_level,
+                                        )
+                                    except Exception as _exc:
+                                        logger.warning("Lint refresh after rebuild failed: %s", _exc)
+
+                                    if not ohe_gate_passed:
+                                        try:
+                                            ohe_rb_recheck = run_openai_premium_hindi_editor_gate(
+                                                script_draft=script_final,
+                                                fact_lock=fact_lock,
+                                                blueprint=blueprint,
+                                                hinglish_level=inp.hinglish_level,
+                                                lint_report=lint_report,
+                                                copyedit_report=copyedit_report,
+                                                quality_report=quality_report,
+                                                review_dir=review_dir,
+                                            )
+                                            ohe_rb_passed = (
+                                                ohe_rb_recheck.get("approved", False)
+                                                and ohe_rb_recheck.get("safe_to_voice", False)
+                                            )
+                                            gate_summary["openai_premium_hindi_editor"].update({
+                                                "passed":        ohe_rb_passed,
+                                                "overall_score": ohe_rb_recheck.get("overall_score", 0),
+                                                "recheck":       True,
+                                                "recheck_label": "_after_auto_rebuild",
+                                            })
+                                            if not ohe_rb_passed:
+                                                warnings.append(
+                                                    f"OHE recheck after auto-rebuild FAILED "
+                                                    f"(overall_score={ohe_rb_recheck.get('overall_score', 0)})."
+                                                )
+                                        except Exception as exc:
+                                            logger.error(
+                                                "OHE recheck after rebuild failed: %s", exc
+                                            )
+                                            warnings.append(
+                                                f"OpenAI Hindi editor recheck after rebuild failed: {exc}."
+                                            )
+                                            openai_repair_has_failures = True
+
+                                    if not oyr_gate_passed:
+                                        try:
+                                            clean_for_rb_recheck = (
+                                                episode_dir / "01-input" / "clean_transcript.txt"
+                                            ).read_text(encoding="utf-8")
+                                            oyr_rb_recheck = run_openai_originality_youtube_risk_gate(
+                                                script_draft=script_final,
+                                                source_transcript=clean_for_rb_recheck,
+                                                fact_lock=fact_lock,
+                                                blueprint=blueprint,
+                                                claude_originality_report=originality_report,
+                                                claude_metadata_report=metadata_report,
+                                                claude_dialogue_report=dialogue_report,
+                                                review_dir=review_dir,
+                                            )
+                                            oyr_rb_passed = (
+                                                oyr_rb_recheck.get("approved", False)
+                                                and oyr_rb_recheck.get("safe_to_voice", False)
+                                            )
+                                            gate_summary["openai_originality_youtube_risk"].update({
+                                                "passed":        oyr_rb_passed,
+                                                "recheck":       True,
+                                                "recheck_label": "_after_auto_rebuild",
+                                            })
+                                            if not oyr_rb_passed:
+                                                warnings.append(
+                                                    "OYR recheck after auto-rebuild FAILED."
+                                                )
+                                        except Exception as exc:
+                                            logger.error(
+                                                "OYR recheck after rebuild failed: %s", exc
+                                            )
+                                            warnings.append(
+                                                f"OYR recheck after rebuild failed: {exc}."
+                                            )
+                                            openai_repair_has_failures = True
+
+                                    # Final OFP recheck
+                                    try:
+                                        ofp_rb_recheck = run_openai_final_premium_gate(
+                                            script_draft=script_final,
+                                            fact_lock=fact_lock,
+                                            blueprint=blueprint,
+                                            hinglish_level=inp.hinglish_level,
+                                            lint_report=lint_report,
+                                            copyedit_report=copyedit_report,
+                                            quality_report=quality_report,
+                                            retention_report=retention_report,
+                                            similarity_report=similarity_report,
+                                            originality_report=originality_report,
+                                            dialogue_report=dialogue_report,
+                                            metadata_report=metadata_report,
+                                            review_dir=review_dir,
+                                            label="_after_auto_rebuild",
+                                            transformation_plan=originality_transformation_plan or None,
+                                        )
+                                        ofp_report = ofp_rb_recheck
+                                        _ofp_rb_passed = (
+                                            ofp_rb_recheck.get("approved", False)
+                                            and ofp_rb_recheck.get("safe_to_voice", False)
+                                        )
+                                        gate_summary["openai_final_premium"].update({
+                                            "passed":        _ofp_rb_passed,
+                                            "approved":      ofp_rb_recheck.get("approved", False),
+                                            "safe_to_voice": ofp_rb_recheck.get("safe_to_voice", False),
+                                            "overall_score": ofp_rb_recheck.get("overall_score", 0),
+                                            "recheck":       True,
+                                            "recheck_label": "_after_auto_rebuild",
+                                        })
+                                        if _ofp_rb_passed:
+                                            status = "script_approved"
+                                            logger.info(
+                                                "Stage 16 always — OFP recheck after auto-rebuild: PASSED"
+                                            )
+                                        else:
+                                            status = "not_voice_ready_auto_retry_exhausted"
+                                            openai_repair_has_failures = True
+                                            warnings.append(
+                                                f"OFP recheck after auto-rebuild FAILED "
+                                                f"(overall_score="
+                                                f"{ofp_rb_recheck.get('overall_score', 0)}). "
+                                                "Manual review required."
+                                            )
+                                    except Exception as exc:
+                                        logger.error(
+                                            "OFP recheck after auto-rebuild failed: %s", exc
+                                        )
+                                        status = "not_voice_ready_auto_retry_exhausted"
+                                        openai_repair_has_failures = True
+                                        warnings.append(
+                                            f"OFP recheck after auto-rebuild (always mode) failed: {exc}."
+                                        )
                             else:
                                 logger.info(
                                     "Stage 16 — OpenAI Targeted Chunk Repair (%d target(s))",
@@ -2514,6 +2871,85 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
 
         # Stamp safe_to_voice into gate_summary for single-field API inspection
         gate_summary["safe_to_voice"] = safe_to_voice  # type: ignore[assignment]
+
+        # ── Automation status + repair telemetry ──────────────────────────────
+        gate_summary["automation_status"] = status
+        _rr_tel = gate_summary.get("repair_routing", {})
+        _af_tel = gate_summary.get("auto_fix", {})
+        gate_summary["repair_telemetry"] = {
+            "repair_route":                _rr_tel.get("route", "none"),
+            "root_cause_count":            _rr_tel.get("root_cause_count", 0),
+            "python_auto_fixes_count":     _af_tel.get("python_fixes_count", 0),
+            "claude_grouped_repair_count": _rr_tel.get("claude_targets_count", 0),
+            "estimated_model_calls_saved": _rr_tel.get("estimated_model_calls_saved", 0),
+            "auto_rebuild_ran":            _af_tel.get("rebuild_ran", False),
+            "auto_rebuild_chunks":         _af_tel.get("rebuild_chunks", 0),
+            "avoided_openai_bulk_repair":  bool(
+                _rr_tel.get("route") in (
+                    "python_only", "claude_grouped_repair", "auto_rebuild_required"
+                )
+            ),
+        }
+
+        # ── Safe-to-voice decision trace (04-review/) ─────────────────────────
+        _stv_blocking: list[str] = []
+        if status not in ("script_approved",):
+            _stv_blocking.append(f"status={status}")
+        if not all_gates_passed:
+            _failing_gate_names = [
+                _gn for _gn, _gs in gate_summary.items()
+                if isinstance(_gs, dict) and _gs.get("passed") is False
+            ]
+            _stv_blocking.append(f"gates_failed={_failing_gate_names}")
+        if not no_repair_failures:
+            _stv_blocking.append("repair_failures=True")
+        if not _pf_gate_ok:
+            _stv_blocking.append("python_preflight=blocking")
+        if not _transformation_gate_ok:
+            _stv_blocking.append("originality_transformation_plan=missing")
+        if not _similarity_ok:
+            _stv_blocking.append(
+                f"text_similarity_high_risk={_sim_high_risk}>{_sim_max_allowed}"
+            )
+        _stv_trace = {
+            "safe_to_voice":     safe_to_voice,
+            "status":            status,
+            "automation_status": status,
+            "elevenlabs_ready":  safe_to_voice,
+            "blocking_reasons":  _stv_blocking,
+            "gate_scores": {
+                "openai_final_premium_overall": gate_summary.get(
+                    "openai_final_premium", {}
+                ).get("overall_score"),
+                "openai_final_premium_passed": gate_summary.get(
+                    "openai_final_premium", {}
+                ).get("passed"),
+                "hindi_copyedit_passed": gate_summary.get(
+                    "hindi_copyedit", {}
+                ).get("passed"),
+                "retention_passed": gate_summary.get(
+                    "retention_quality", {}
+                ).get("passed"),
+                "metadata_passed": gate_summary.get(
+                    "metadata_quality", {}
+                ).get("passed"),
+                "originality_passed": gate_summary.get(
+                    "originality_safety", {}
+                ).get("passed"),
+            },
+            "repair_telemetry": gate_summary.get("repair_telemetry", {}),
+        }
+        try:
+            (review_dir / "safe_to_voice_decision_trace.json").write_text(
+                json.dumps(_stv_trace, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info(
+                "safe_to_voice_decision_trace.json written (safe_to_voice=%s, status=%s)",
+                safe_to_voice, status,
+            )
+        except Exception as _exc:
+            logger.warning("Could not write safe_to_voice_decision_trace.json: %s", _exc)
 
         if copyedit_repair_has_failures and not any("Copyedit repair had failures" in w for w in warnings):
             warnings.append(

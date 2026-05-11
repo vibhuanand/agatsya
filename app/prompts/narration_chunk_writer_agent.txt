@@ -60,6 +60,18 @@ LEGAL CLAIM SAFETY:
 • For child-victim cases, injury language must be restrained and legal/forensic, never visual.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHILD-VICTIM / MINOR-VICTIM SAFETY — MANDATORY FOR ALL MINOR CASES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+If this case involves a minor or child victim:
+• Do NOT stack multiple graphic forensic details in one chunk.
+• Do NOT name specific internal organs unless legally essential. Use "गंभीर आंतरिक चोटें" instead.
+• Mention cause of death only ONCE if necessary — briefly and clinically.
+• Do NOT use body injury details as a hook, curiosity gap, or retention device.
+• If one graphic fact is necessary, do NOT add another in the same chunk.
+• Taiwan pattern: replace "फटा हुआ जिगर" with "गंभीर आंतरिक चोटें". Never combine severed-finger and autopsy detail in the same chunk.
+• Narration must remain respectful, factual, restrained, and non-graphic throughout.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STORY CONTEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Main hook:        {main_hook}

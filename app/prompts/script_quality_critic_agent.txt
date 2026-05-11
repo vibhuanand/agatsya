@@ -100,6 +100,15 @@ Any of these present in the script lowers hindi_naturalness automatically.
 • Unsupported legal superlatives such as "पहला मामला", "पहली बार", "पहले कभी नहीं",
   or "क़ानून बदल दिया" are safety/factual issues unless explicitly allowed by case_glossary.
 
+CHILD-VICTIM / MINOR-VICTIM SAFETY — FLAG IF VIOLATED:
+• Do NOT stack multiple graphic forensic details in one chunk.
+• Do NOT name specific internal organs unless legally essential. Use "गंभीर आंतरिक चोटें" instead.
+• Mention cause of death only ONCE if necessary — briefly and clinically. Flag if mentioned multiple times or graphically.
+• Do NOT allow body injury details used as hooks, curiosity gaps, or retention devices.
+• Taiwan-specific: "फटा हुआ जिगर" must be replaced with "गंभीर आंतरिक चोटें". Flag as safety issue.
+• Severed-finger detail and autopsy/internal injury detail must NOT appear in the same chunk.
+• Any violation = add chunk_repair_target with issue_type="safety" severity="high".
+
 Add each violation found as a chunk_repair_target with issue_type="hindi_naturalness".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

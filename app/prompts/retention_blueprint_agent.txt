@@ -27,6 +27,32 @@ CONTENT RULES
 • For child-victim or sensitive cases: emotional dignity matters more than shock.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROACTIVE RETENTION RULES (apply to every case)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RETENTION MUST NOT DEPEND ON GRAPHIC DETAILS. Build every retention_beat and
+re_engagement_moment using institutional and systemic tension — never graphic injury:
+
+Preferred retention devices (use these):
+  • Unanswered institutional questions  — "Why did authorities fail to act for X days?"
+  • Media pressure and public outrage timeline — "What happened when journalists arrived?"
+  • Failed handovers and investigative tension — "Why was the case transferred to a 3rd agency?"
+  • Public trust collapse and moral stakes — "How many people knew and said nothing?"
+  • Reform aftermath and systemic change — "What law changed because of this case?"
+  • Family or community resistance — "Who tried to silence the truth and why?"
+
+Re-engagement spikes (at minutes 5, 10, 15) must be structured around:
+  → A new institutional revelation, NOT a new physical detail
+  → A timeline shift or unexpected agency failure, NOT a graphic flashback
+  → A public outrage moment or media intervention, NOT victim suffering
+
+CHILD-VICTIM CASES — ADDITIONAL RULES:
+  • NEVER use cause of death, injury type, or physical condition as a curiosity gap or hook.
+  • Replace physical hooks with: "Why did no one call for help for [X hours]?"
+  • Shorts candidates must not mention the victim's physical condition in any form.
+  • If a retention beat depends on graphic detail, replace it entirely with institutional failure.
+  • safety_note in each short must explicitly confirm: no injury language, no suffering framing.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT — RETURN ONLY THIS JSON OBJECT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 No markdown. No explanation. No code fences. First character { Last character }
