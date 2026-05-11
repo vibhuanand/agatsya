@@ -500,6 +500,27 @@ def run_python_preflight(
                     _meta_target("thumbnail_options", "thumbnail_shock_word", problem, instruction)
                 )
 
+    # Unverified media authenticity claims in metadata (mirrors narration check)
+    if not allow_verified_media_claims:
+        meta_text_lower_claims = metadata_text.lower()
+        for phrase in _UNVERIFIED_CLAIM_PHRASES:
+            if phrase.lower() in meta_text_lower_claims:
+                problem = f"Metadata contains unverified media claim: '{phrase}'."
+                instruction = (
+                    f"Remove '{phrase}' from all metadata fields unless fact-checked and sourced. "
+                    "Set allow_verified_media_claims=True in case_glossary if verified."
+                )
+                metadata_issues.append({
+                    "severity": "high",
+                    "type": "unverified_media_claim_metadata",
+                    "problem": problem,
+                })
+                metadata_targets.append(
+                    _meta_target(
+                        "youtube_metadata", "unverified_media_claim_metadata", problem, instruction
+                    )
+                )
+
     # Graphic content / sexualized framing / child harm in metadata text
     meta_text_lower = metadata_text.lower()
     for phrase in _GRAPHIC_CONTENT_PHRASES + _SEXUALIZED_VICTIM_PHRASES + _CHILD_HARM_PHRASES:

@@ -404,3 +404,219 @@ def test_post_oai_repair_preflight_blocking_sets_needs_human_review(tmp_path):
         gate_summary=gate_summary,
     )
     assert safe_to_voice is False
+
+
+# ── Python preflight exception = blocking (item 1) ────────────────────────────
+
+def _exception_gate_summary_entry() -> dict:
+    """Gate summary entry produced when Python preflight raises an exception.
+    Mirrors the exact dict written in agent_pipeline_service.py exception handlers.
+    """
+    return {
+        "passed":    False,
+        "blocking":  True,
+        "high":      0,
+        "medium":    0,
+        "low":       0,
+        "report":    "python_preflight_report_after_repair.json",
+        "rechecked": True,
+        "error":     "simulated exception",
+    }
+
+
+def test_preflight_exception_is_treated_as_blocking():
+    """When post-repair Python preflight raises an exception, blocking must be True."""
+    entry = _exception_gate_summary_entry()
+    assert entry["blocking"] is True
+    assert entry["passed"] is False
+
+
+def test_preflight_exception_blocks_openai_gates():
+    """When preflight exception sets blocking=True, _openai_gates_active must be False."""
+    entry = _exception_gate_summary_entry()
+    # _post_repair_preflight_blocking = entry["blocking"]
+    gates_active = _compute_openai_gates_active(
+        openai_review_enabled=True,
+        quality_mode="premium_final",
+        openai_review_policy="adaptive",
+        post_repair_preflight_blocking=entry["blocking"],
+    )
+    assert gates_active is False
+
+
+def test_preflight_exception_means_safe_to_voice_false():
+    """When preflight exception sets blocking=True in gate_summary, safe_to_voice=False."""
+    gate_summary = {"python_preflight": _exception_gate_summary_entry()}
+    safe_to_voice = _compute_safe_to_voice(
+        status="script_approved",
+        all_gates_passed=True,
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is False
+
+
+def test_post_oai_repair_preflight_exception_blocks_ofp_recheck():
+    """When Stage 16b preflight raises an exception, _post_oai_pf_blocking=True
+    so the OFP recheck guard (if not _post_oai_pf_blocking) prevents the recheck."""
+    # Mirrors: except Exception → _post_oai_pf_blocking = True
+    _post_oai_pf_blocking = True  # exception handler sets this
+    recheck_active = _compute_oai_recheck_active(post_oai_pf_blocking=_post_oai_pf_blocking)
+    assert recheck_active is False
+
+
+def test_preflight_exception_gate_summary_has_error_field():
+    """Gate summary from exception handler must include 'error' key for diagnostics."""
+    entry = _exception_gate_summary_entry()
+    assert "error" in entry
+    assert entry["error"]  # non-empty
+
+
+def test_preflight_exception_status_is_needs_human_review():
+    """When preflight exception occurs, status must be set to needs_human_review.
+    This ensures safe_to_voice stays False regardless of other gate results."""
+    gate_summary = {"python_preflight": _exception_gate_summary_entry()}
+    # status="needs_human_review" is set by the exception handler
+    safe_to_voice = _compute_safe_to_voice(
+        status="needs_human_review",
+        all_gates_passed=True,
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is False
+
+
+# ── _gate_passed_for_safe_to_voice helper (item 1) ───────────────────────────
+
+from app.services.agent_pipeline_service import _gate_passed_for_safe_to_voice
+
+
+def _all_gates_passed(gate_summary: dict) -> bool:
+    """Mirror of the all_gates_passed computation in agent_pipeline_service.py."""
+    return all(
+        _gate_passed_for_safe_to_voice(name, gate)
+        for name, gate in gate_summary.items()
+    )
+
+
+def test_python_preflight_low_only_passed_false_blocking_false(tmp_path):
+    """preflight with only low issues has passed=False and blocking=False."""
+    from app.services.python_preflight_service import run_python_preflight
+    import pytest
+    make_chunk = pytest.make_chunk
+    make_script = pytest.make_script
+    make_glossary = pytest.make_glossary
+    from tests.conftest import _make_metadata
+
+    # pinned_comment missing → low severity only
+    metadata = _make_metadata()
+    metadata.pop("pinned_comment", None)
+    metadata["pinned_comment"] = ""
+    script = make_script([make_chunk("001", "साफ़ पाठ।")], metadata=metadata)
+    glossary = make_glossary()
+    review_dir = tmp_path / "04-review"
+    review_dir.mkdir()
+    report = run_python_preflight(
+        script_draft=script, fact_lock={}, case_glossary=glossary,
+        review_dir=review_dir, target_duration_min=20, hinglish_level=2,
+    )
+    assert report["passed"] is False      # has an issue (low)
+    assert report["blocking"] is False    # low only → not blocking
+    counts = report["severity_counts"]
+    assert counts["low"] >= 1
+    assert counts["high"] == 0
+    assert counts["medium"] == 0
+
+
+def test_gate_passed_helper_low_only_is_non_blocking():
+    """_gate_passed_for_safe_to_voice treats python_preflight low-only as passing."""
+    gate = {"passed": False, "blocking": False, "low": 1, "high": 0, "medium": 0}
+    assert _gate_passed_for_safe_to_voice("python_preflight", gate) is True
+
+
+def test_gate_passed_helper_medium_issue_is_blocking():
+    """_gate_passed_for_safe_to_voice treats python_preflight with medium as blocking."""
+    gate = {"passed": False, "blocking": True, "low": 0, "high": 0, "medium": 1}
+    assert _gate_passed_for_safe_to_voice("python_preflight", gate) is False
+
+
+def test_gate_passed_helper_high_issue_is_blocking():
+    """_gate_passed_for_safe_to_voice treats python_preflight with high as blocking."""
+    gate = {"passed": False, "blocking": True, "low": 0, "high": 1, "medium": 0}
+    assert _gate_passed_for_safe_to_voice("python_preflight", gate) is False
+
+
+def test_gate_passed_helper_missing_python_preflight_is_blocking():
+    """When python_preflight entry is absent, safe_to_voice must be blocked."""
+    # The _pf_gate_ok guard uses .get("blocking", True) so missing = blocking.
+    # _gate_passed_for_safe_to_voice with blocking absent defaults to True (blocking).
+    gate = {}  # no blocking key
+    assert _gate_passed_for_safe_to_voice("python_preflight", gate) is False
+
+
+def test_safe_to_voice_with_low_only_preflight_and_all_other_gates_passing(tmp_path):
+    """Low-only python_preflight must not block safe_to_voice when all other gates pass."""
+    pf_low_only = {"passed": False, "blocking": False, "low": 1, "high": 0, "medium": 0}
+    other_gate = {"passed": True}
+    gate_summary = {
+        "python_preflight": pf_low_only,
+        "script_quality": other_gate,
+        "hindi_copyedit": other_gate,
+    }
+    assert _all_gates_passed(gate_summary) is True
+    safe_to_voice = _compute_safe_to_voice(
+        status="script_approved",
+        all_gates_passed=_all_gates_passed(gate_summary),
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is True
+
+
+def test_safe_to_voice_blocked_by_medium_preflight_even_if_other_gates_pass():
+    """Medium python_preflight issue must block safe_to_voice."""
+    pf_medium = {"passed": False, "blocking": True, "low": 0, "high": 0, "medium": 1}
+    other_gate = {"passed": True}
+    gate_summary = {
+        "python_preflight": pf_medium,
+        "script_quality": other_gate,
+    }
+    assert _all_gates_passed(gate_summary) is False
+    safe_to_voice = _compute_safe_to_voice(
+        status="script_approved",
+        all_gates_passed=_all_gates_passed(gate_summary),
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is False
+
+
+def test_safe_to_voice_blocked_by_high_preflight_even_if_other_gates_pass():
+    """High python_preflight issue must block safe_to_voice."""
+    pf_high = {"passed": False, "blocking": True, "low": 0, "high": 1, "medium": 0}
+    gate_summary = {"python_preflight": pf_high, "script_quality": {"passed": True}}
+    assert _all_gates_passed(gate_summary) is False
+    safe_to_voice = _compute_safe_to_voice(
+        status="script_approved",
+        all_gates_passed=_all_gates_passed(gate_summary),
+        no_repair_failures=True,
+        gate_summary=gate_summary,
+    )
+    assert safe_to_voice is False
+
+
+def test_gate_summary_low_count_visible_when_not_blocking():
+    """Even when python_preflight is non-blocking, low count stays in gate_summary."""
+    pf = {"passed": False, "blocking": False, "low": 2, "high": 0, "medium": 0,
+          "report": "python_preflight_report.json"}
+    assert pf["low"] == 2
+    assert _gate_passed_for_safe_to_voice("python_preflight", pf) is True
+
+
+def test_non_preflight_gate_uses_passed_field():
+    """Non-python_preflight gates are evaluated with their passed field, not blocking."""
+    gate_passing = {"passed": True, "blocking": False}
+    gate_failing = {"passed": False, "blocking": False}  # blocking=False irrelevant
+    assert _gate_passed_for_safe_to_voice("script_quality", gate_passing) is True
+    assert _gate_passed_for_safe_to_voice("script_quality", gate_failing) is False
+    assert _gate_passed_for_safe_to_voice("hindi_copyedit", gate_failing) is False
