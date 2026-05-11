@@ -267,6 +267,21 @@ def _try_load_existing(path: Path, stage_name: str, **kwargs: Any) -> dict | Non
     return _try_load_existing_json(path, stage_name, **kwargs)
 
 
+def _gate_passed_for_safe_to_voice(name: str, gate: dict) -> bool:
+    """Return whether a gate entry should be treated as passing for safe_to_voice.
+
+    python_preflight uses the blocking field (not passed) as its blocking signal.
+    passed=False for any issue (including low-only warnings), but blocking=False
+    when only low issues exist. Low-only warnings must not block safe_to_voice —
+    only medium/high issues (blocking=True) should.
+
+    All other gates use their passed field directly.
+    """
+    if name == "python_preflight":
+        return not gate.get("blocking", True)
+    return gate.get("passed", False)
+
+
 def _reload_latest_gate_reports(
     review_dir: Path,
     lint_report: dict,
@@ -2344,7 +2359,14 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         # all_gates_passed checks every content gate entry currently in gate_summary.
         # repair_failures is added AFTER this check so it does not interfere.
         # safe_to_voice additionally requires no_repair_failures as a belt-and-suspenders check.
-        all_gates_passed = all(g.get("passed", False) for g in gate_summary.values())
+        #
+        # python_preflight is evaluated via blocking (not passed) because passed=False
+        # for any issue including low-only warnings, but low warnings must not block
+        # safe_to_voice. See _gate_passed_for_safe_to_voice for the full decision table.
+        all_gates_passed = all(
+            _gate_passed_for_safe_to_voice(name, gate)
+            for name, gate in gate_summary.items()
+        )
 
         no_repair_failures = (
             (not repair_has_failures)
