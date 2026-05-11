@@ -81,6 +81,7 @@ from app.services.openai_targeted_chunk_repair_service import (
     run_openai_targeted_chunk_repair,
 )
 from app.services.openai_final_premium_gate_service import run_openai_final_premium_gate
+from app.services.originality_transformation_service import run_originality_transformation
 from app.services import stage_manifest_service
 from app.services.retention_blueprint_service import run_retention_blueprint
 from app.services.retention_quality_gate_service import (
@@ -89,6 +90,10 @@ from app.services.retention_quality_gate_service import (
 )
 from app.services import call_tracker
 from app.services.call_tracker import BudgetExceededError
+from app.services.report_normalization_service import (
+    safe_join_report_items,
+    stringify_report_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -735,6 +740,69 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                 len(shorts_candidates),
             )
 
+    # ── Stage 3.75: Originality Transformation Plan ───────────────────────────
+    # Runs after fact_lock + story_blueprint, before script_outline / script_writer.
+    # Non-fatal: failure is logged + warned, but safe_to_voice is blocked.
+    originality_transformation_plan: dict = {}
+    _transformation_plan_ok = False   # True when plan exists and is non-empty
+
+    if settings.originality_transformation_enabled and settings.quality_mode != "premium_batch":
+        logger.info("Stage 3.75 — Originality Transformation Planner")
+        existing_otp = _try_load_existing(
+            facts_dir / "originality_transformation_plan.json",
+            "originality_transformation",
+            episode_dir=episode_dir,
+            prompt_check="originality_transformation",
+        )
+        if existing_otp is not None:
+            originality_transformation_plan = existing_otp
+            _transformation_plan_ok = bool(originality_transformation_plan)
+            logger.info(
+                "Stage 3.75 — Loaded existing transformation plan "
+                "(source_risk=%s, original_sections=%d)",
+                originality_transformation_plan.get("source_dependency_risk", "?"),
+                len(originality_transformation_plan.get("original_story_structure", [])),
+            )
+        else:
+            try:
+                call_tracker.stage_start("originality_transformation")
+                originality_transformation_plan = run_originality_transformation(
+                    case_hint=inp.case_hint,
+                    target_duration_min=inp.target_duration_min,
+                    hinglish_level=inp.hinglish_level,
+                    fact_lock=fact_lock,
+                    blueprint=blueprint,
+                    source_transcript=clean,
+                    facts_dir=facts_dir,
+                )
+                _transformation_plan_ok = bool(originality_transformation_plan)
+                call_tracker.stage_end("originality_transformation")
+                logger.info(
+                    "Stage 3.75 — Transformation plan ready "
+                    "(source_risk=%s, original_sections=%d, instructions=%d)",
+                    originality_transformation_plan.get("source_dependency_risk", "?"),
+                    len(originality_transformation_plan.get("original_story_structure", [])),
+                    len(originality_transformation_plan.get("writer_instructions", [])),
+                )
+            except Exception as exc:
+                logger.error("Originality transformation plan failed (non-fatal): %s", exc)
+                warnings.append(
+                    f"Originality Transformation Planner failed: {exc}. "
+                    "Script will be written without transformation guidance. "
+                    "safe_to_voice will be False. "
+                    "See 02-facts/_originality_transformation_raw_response.txt for details."
+                )
+                originality_transformation_plan = {}
+                _transformation_plan_ok = False
+    else:
+        # Feature disabled or premium_batch mode — treat as not required
+        _transformation_plan_ok = True
+        logger.info(
+            "Stage 3.75 — Skipped (originality_transformation_enabled=%s quality_mode=%s)",
+            settings.originality_transformation_enabled,
+            settings.quality_mode,
+        )
+
     # ── Stage 4: Script Writer ────────────────────────────────────────────────
     call_tracker.stage_start("script_writer")
     logger.info("Stage 4 — Hindi Script Writer Agent")
@@ -758,6 +826,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             hinglish_level=inp.hinglish_level,
             retention_blueprint=retention_blueprint if retention_blueprint else None,
             case_glossary=case_glossary,
+            originality_transformation_plan=originality_transformation_plan or None,
         )
 
     _validate_script_draft(script_draft, script_dir)
@@ -947,6 +1016,16 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     gate_summary: dict[str, dict] = {}
     safe_to_voice = False
 
+    # Record originality_transformation gate result (set in Stage 3.75)
+    gate_summary["originality_transformation"] = {
+        "passed":   _transformation_plan_ok,
+        "skipped":  not settings.originality_transformation_enabled
+                    or settings.quality_mode == "premium_batch",
+        "plan_exists": bool(originality_transformation_plan),
+        "source_risk": originality_transformation_plan.get("source_dependency_risk", "unknown")
+                        if originality_transformation_plan else "unknown",
+    }
+
     # Always record script_quality gate result
     gate_summary["script_quality"] = {
         "passed": quality_report.get("approved", False),
@@ -982,6 +1061,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             "openai_final_premium":            {"passed": True, "skipped": True, "reason": "SKIP_FINAL_GATES"},
             "openai_premium_hindi_editor":     {"passed": True, "skipped": True, "reason": "SKIP_FINAL_GATES"},
             "openai_originality_youtube_risk": {"passed": True, "skipped": True, "reason": "SKIP_FINAL_GATES"},
+            # originality_transformation gate result was already written above (Stage 3.75)
             "repair_failures": {
                 "claude_script_repair_failed":  False,
                 "copyedit_repair_failed":       False,
@@ -1170,14 +1250,14 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         gate_summary["originality_safety"] = {
             "passed":         originality_report.get("gate_passed", False),
             "scores":         originality_report.get("scores", {}),
-            "required_fixes": originality_report.get("required_fixes", []),
+            "required_fixes": stringify_report_list(originality_report.get("required_fixes", [])),
         }
         if not originality_report.get("gate_passed", False):
             required_fixes = originality_report.get("required_fixes", [])
             if required_fixes:
                 warnings.append(
                     "Originality/safety gate FAILED. Required fixes: "
-                    + "; ".join(required_fixes[:3])
+                    + safe_join_report_items(required_fixes, limit=3)
                     + (f" (+{len(required_fixes)-3} more)" if len(required_fixes) > 3 else "")
                 )
             status = "needs_human_review"
@@ -1208,14 +1288,14 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             "passed":         dialogue_report.get("gate_passed", False),
             "no_scenes":      dialogue_report.get("no_recreated_scenes", False),
             "scores":         dialogue_report.get("scores", {}),
-            "required_fixes": dialogue_report.get("required_fixes", []),
+            "required_fixes": stringify_report_list(dialogue_report.get("required_fixes", [])),
         }
         if not dialogue_report.get("gate_passed", False):
             required_fixes = dialogue_report.get("required_fixes", [])
             if required_fixes:
                 warnings.append(
                     "Recreated dialogue gate FAILED. Required fixes: "
-                    + "; ".join(required_fixes[:3])
+                    + safe_join_report_items(required_fixes, limit=3)
                     + (f" (+{len(required_fixes)-3} more)" if len(required_fixes) > 3 else "")
                 )
             status = "needs_human_review"
@@ -1291,7 +1371,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             if meta_required_fixes and not _preflight_forces_meta_repair:
                 warnings.append(
                     "Metadata quality gate FAILED. Required fixes: "
-                    + "; ".join(meta_required_fixes[:3])
+                    + safe_join_report_items(meta_required_fixes, limit=3)
                     + (f" (+{len(meta_required_fixes)-3} more)" if len(meta_required_fixes) > 3 else "")
                 )
 
@@ -1348,7 +1428,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         gate_summary["metadata_quality"] = {
             "passed":         metadata_report.get("gate_passed", False),
             "scores":         metadata_report.get("scores", {}),
-            "required_fixes": metadata_report.get("required_fixes", []),
+            "required_fixes": stringify_report_list(metadata_report.get("required_fixes", [])),
             "repair_ran":     not metadata_report.get("gate_passed", True),
         }
         if not metadata_report.get("gate_passed", False) and not metadata_repair_has_failures:
@@ -1655,6 +1735,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                             dialogue_report=dialogue_report,
                             metadata_report=metadata_report,
                             review_dir=review_dir,
+                            transformation_plan=originality_transformation_plan or None,
                         )
                     except Exception as exc:
                         logger.error("OpenAI Final Premium Gate failed: %s", exc)
@@ -1921,6 +2002,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                 metadata_report=metadata_report,
                                                 review_dir=review_dir,
                                                 label="_after_repair",
+                                                transformation_plan=originality_transformation_plan or None,
                                             )
                                             ofp_report = ofp_recheck
                                             ofp_now_passed = (
@@ -2100,7 +2182,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         fixes = oyr_report.get("required_fixes", [])
                         warnings.append(
                             "OpenAI originality/YT risk gate FAILED. Required fixes: "
-                            + ("; ".join(fixes[:3]) if fixes else "see report")
+                            + (safe_join_report_items(fixes, limit=3) if fixes else "see report")
                             + (f" (+{len(fixes)-3} more)" if len(fixes) > 3 else "")
                             + " — See 04-review/openai_originality_youtube_risk_report.json."
                         )
@@ -2248,7 +2330,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                                 warnings.append(
                                                     "OpenAI originality/YT risk recheck FAILED. "
                                                     "Required fixes: "
-                                                    + ("; ".join(fixes_r[:3]) if fixes_r else "see report")
+                                                    + (safe_join_report_items(fixes_r, limit=3) if fixes_r else "see report")
                                                     + (f" (+{len(fixes_r)-3} more)" if len(fixes_r) > 3 else "")
                                                 )
                                         except Exception as exc:
@@ -2390,12 +2472,45 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
         }
 
         _pf_gate_ok = not gate_summary.get("python_preflight", {}).get("blocking", True)
+
+        # Originality transformation plan must exist (unless feature disabled/batch mode)
+        _transformation_gate_ok = gate_summary.get(
+            "originality_transformation", {}
+        ).get("passed", True)
+
+        # High-risk source similarity check (verbatim long phrases from source transcript)
+        _sim_high_risk = similarity_report.get("high_risk_matches", 0)
+        _sim_max_allowed = settings.source_similarity_max_high_risk_matches
+        _similarity_ok = _sim_high_risk <= _sim_max_allowed
+        if not _similarity_ok:
+            logger.warning(
+                "safe_to_voice blocked: high_risk_matches=%d exceeds "
+                "SOURCE_SIMILARITY_MAX_HIGH_RISK_MATCHES=%d",
+                _sim_high_risk, _sim_max_allowed,
+            )
+            if not any("high_risk_matches" in w for w in warnings):
+                warnings.append(
+                    f"Text similarity check found {_sim_high_risk} high-risk verbatim match(es) "
+                    f"(allowed: {_sim_max_allowed}). "
+                    "safe_to_voice=False — reduce source-verbatim content before audio generation. "
+                    "See 04-review/text_similarity_report.json."
+                )
+
         safe_to_voice = (
             (status == "script_approved")
             and all_gates_passed
             and no_repair_failures
-            and _pf_gate_ok  # python_preflight must not be blocking
+            and _pf_gate_ok             # python_preflight must not be blocking
+            and _transformation_gate_ok  # originality_transformation_plan must exist
+            and _similarity_ok           # high-risk source copy must be within limit
         )
+
+        if not _transformation_gate_ok and not any("ransformation" in w for w in warnings):
+            warnings.append(
+                "Originality Transformation Plan missing or failed. "
+                "safe_to_voice=False — run the pipeline again or check "
+                "02-facts/_originality_transformation_raw_response.txt."
+            )
 
         # Stamp safe_to_voice into gate_summary for single-field API inspection
         gate_summary["safe_to_voice"] = safe_to_voice  # type: ignore[assignment]

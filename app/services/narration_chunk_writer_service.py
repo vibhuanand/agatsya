@@ -30,6 +30,34 @@ logger = logging.getLogger(__name__)
 _PROMPT_PATH = Path("app/prompts/narration_chunk_writer_agent.txt")
 
 
+def _build_originality_instructions(
+    originality_transformation_plan: dict | None,
+) -> str:
+    """Produce a compact instruction block from the transformation plan for this chunk."""
+    if not originality_transformation_plan:
+        return (
+            "No originality plan provided. Write original Hindi narration — "
+            "do not translate or paraphrase source content."
+        )
+    parts: list[str] = []
+    writer_instructions = originality_transformation_plan.get("writer_instructions", [])
+    if writer_instructions:
+        parts.append("Writer instructions:")
+        for instr in writer_instructions[:5]:
+            parts.append(f"  • {instr}")
+    avoid = originality_transformation_plan.get("phrases_or_patterns_to_avoid", [])
+    if avoid:
+        parts.append("Patterns and phrases to avoid:")
+        for phrase in avoid[:5]:
+            parts.append(f"  ✗ {phrase}")
+    required = originality_transformation_plan.get("required_original_elements", [])
+    if required:
+        parts.append("Required original elements:")
+        for elem in required[:5]:
+            parts.append(f"  ✓ {elem}")
+    return "\n".join(parts) if parts else "Write original Hindi narration — do not translate source content."
+
+
 def _build_chunk_prompt(
     chunk_spec: dict,
     fact_lock: dict,
@@ -38,6 +66,7 @@ def _build_chunk_prompt(
     prev_last_sentence: str,
     next_chunk_purpose: str,
     hinglish_level: int = 2,
+    originality_transformation_plan: dict | None = None,
 ) -> str:
     template = _PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -102,6 +131,8 @@ def _build_chunk_prompt(
     else:
         retention_guidance = ""
 
+    originality_instructions = _build_originality_instructions(originality_transformation_plan)
+
     replacements = {
         "{channel_rules}": get_channel_rules(),
         "{chunk_id}": chunk_id,
@@ -122,6 +153,7 @@ def _build_chunk_prompt(
         "{closing_style}": closing_style,
         "{sensitivity_rules_text}": sensitivity_rules_text,
         "{retention_guidance}": retention_guidance,
+        "{originality_plan_instructions}": originality_instructions,
     }
     prompt = template
     for key, value in replacements.items():
@@ -152,6 +184,7 @@ def run_narration_chunk(
     prev_last_sentence: str = "",
     next_chunk_purpose: str = "",
     hinglish_level: int = 2,
+    originality_transformation_plan: dict | None = None,
 ) -> dict:
     """
     Write one narration chunk with retry logic.
@@ -179,6 +212,7 @@ def run_narration_chunk(
                 prev_last_sentence=prev_last_sentence,
                 next_chunk_purpose=next_chunk_purpose,
                 hinglish_level=hinglish_level,
+                originality_transformation_plan=originality_transformation_plan,
             )
 
             raw_response, stop_reason = call_claude_agent(prompt, agent_name=agent_label)

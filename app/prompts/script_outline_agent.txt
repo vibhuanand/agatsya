@@ -40,6 +40,13 @@ RETENTION BLUEPRINT
 {retention_blueprint_json}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ORIGINALITY TRANSFORMATION PLAN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{originality_transformation_note}
+
+{originality_transformation_json}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTLINE RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Create 12–16 chunks. Sum of target_words across all chunks must be close to target_word_count_ideal.
@@ -66,14 +73,21 @@ OUTLINE RULES
    Each scene must have a safety_boundary. If no recreated scenes, use empty array.
 10. No narration text. No dialogue. No metadata. Planning only.
 
+ORIGINALITY RULES (apply when Originality Transformation Plan is provided):
+11. Use original_story_structure from the Originality Transformation Plan as the preferred section order.
+    Do not mechanically follow the source transcript sequence unless chronology absolutely requires it.
+    Map the plan's original_story_structure entries to chunk IDs below — the plan's section order takes precedence.
+12. Honour phrases_or_patterns_to_avoid from the plan in all section titles and purpose descriptions.
+13. The 001_hook must use an original opening as specified in required_original_elements — do not copy the source intro.
+
 RETENTION RULES (apply when Retention Blueprint is provided):
-11. For each chunk assign retention_goal — one sentence describing what viewer experience this chunk must create.
-12. curiosity_gap: the unanswered question this chunk plants in the viewer's mind. Leave blank for 000_disclaimer only.
-13. viewer_payoff: what the viewer gets (reveal, emotional moment, new info) — or "setup" if this chunk plants without paying off.
-14. pattern_interrupt: use only if a short tonal shift, question, or reveal would help this section avoid monotony. Otherwise leave blank.
-15. Place re_engagement_moments from the Retention Blueprint at the approximate minute marks they specify — map to the chunk covering that minute range.
-16. 001_hook must follow opening_hook and central_question from the Retention Blueprint.
-17. 010_closing must follow ending_strategy from the blueprint.
+14. For each chunk assign retention_goal — one sentence describing what viewer experience this chunk must create.
+15. curiosity_gap: the unanswered question this chunk plants in the viewer's mind. Leave blank for 000_disclaimer only.
+16. viewer_payoff: what the viewer gets (reveal, emotional moment, new info) — or "setup" if this chunk plants without paying off.
+17. pattern_interrupt: use only if a short tonal shift, question, or reveal would help this section avoid monotony. Otherwise leave blank.
+18. Place re_engagement_moments from the Retention Blueprint at the approximate minute marks they specify — map to the chunk covering that minute range.
+19. 001_hook must follow opening_hook and central_question from the Retention Blueprint.
+20. 010_closing must follow ending_strategy from the blueprint.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT

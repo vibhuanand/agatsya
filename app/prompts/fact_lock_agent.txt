@@ -21,28 +21,60 @@ Pay special attention to legal outcomes in the ENDING section — that is where 
 
 {transcript_research_view}
 
+{compact_extraction_note}
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EXTRACTION RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Extract ONLY what is stated or clearly implied in the transcript.
 2. Do NOT invent names, dates, locations, or outcomes.
 3. Confidence levels:
-   "high"   — explicitly stated with a quotable source_phrase
+   "high"   — explicitly stated; give a short source_note (not a long quote)
    "medium" — strongly implied but not directly quoted
    "low"    — inferred or uncertain — must appear in facts_to_verify_externally
 4. legal_outcome: extract trial result, any appeals, and final sentence / parole terms.
-   If the transcript clearly states a final verdict, confidence must be "high" — do not mark it "low".
+   If the transcript clearly states a final verdict, confidence must be "high".
 5. emotional_details: memorable human moments — what made the victim unique, family reactions, memorials.
-6. important_audio_or_call_moments: 911 calls, police interviews, wiretaps, undercover confessions — these are often recreatable.
-7. recreated_scene_candidates: which moments could be safely recreated as short dialogue for the episode.
+6. important_audio_or_call_moments: 911 calls, police interviews, wiretaps, undercover confessions.
+7. recreated_scene_candidates: which moments could be safely recreated as short dialogue.
 8. must_not_say: anything inaccurate, exploitative, or legally dangerous to assert.
 9. key_evidence_or_turning_points: facts, forensic findings, or confessions that changed the case direction.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HARD OUTPUT LIMITS — STRICT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Prefer compact factual entries over exhaustive extraction.
+The goal is a reliable fact lock, not a transcript summary.
+
+Do NOT exceed these counts (truncate to the most important items):
+  verified_people                  — max 12 items
+  verified_dates                   — max 12 items
+  verified_locations               — max 10 items
+  verified_timeline                — max 18 items
+  key_evidence_or_turning_points   — max 12 items
+  important_audio_or_call_moments  — max 8 items
+  emotional_details                — max 10 items
+  recreated_scene_candidates       — max 6 items
+  facts_to_verify_externally       — max 10 items
+  must_not_say                     — max 12 items
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SOURCE REFERENCE RULES — CRITICAL FOR JSON SAFETY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+source_phrase is OPTIONAL and SHORT:
+  - Maximum 120 characters.
+  - Do NOT copy long sentences from the transcript.
+  - Do NOT include unescaped quotation marks.
+  - If the original contains quotes or is longer than 120 chars, use source_note with a short paraphrase instead.
+  - When in doubt, omit source_phrase entirely and use source_note.
+  - source_note is always safe: write a brief paraphrase in your own words, no quoting required.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Return ONLY a valid JSON object.
-No markdown. No explanation. No code fences. No trailing commas.
+No markdown. No explanation. No code fences. No comments. No trailing commas.
+Every string value must be JSON-safe: no unescaped backslashes, no unescaped quotes.
 The JSON must be COMPLETE — every opening brace must have a matching closing brace.
 
 {
@@ -53,7 +85,7 @@ The JSON must be COMPLETE — every opening brace must have a matching closing b
       "name": "",
       "role": "",
       "confidence": "high|medium|low",
-      "source_phrase": ""
+      "source_note": ""
     }
   ],
   "verified_dates": [
@@ -61,7 +93,7 @@ The JSON must be COMPLETE — every opening brace must have a matching closing b
       "date_or_period": "",
       "event": "",
       "confidence": "high|medium|low",
-      "source_phrase": ""
+      "source_note": ""
     }
   ],
   "verified_locations": [
@@ -77,7 +109,7 @@ The JSON must be COMPLETE — every opening brace must have a matching closing b
       "date_or_period": "",
       "event": "",
       "confidence": "high|medium|low",
-      "source_phrase": ""
+      "source_note": ""
     }
   ],
   "legal_outcome": {
@@ -86,12 +118,12 @@ The JSON must be COMPLETE — every opening brace must have a matching closing b
     "supreme_court_or_final_result": "",
     "sentence_or_parole": "",
     "confidence": "high|medium|low",
-    "source_phrase": ""
+    "source_note": ""
   },
   "key_evidence_or_turning_points": [
     {
       "evidence": "",
-      "source_phrase": "",
+      "source_note": "",
       "confidence": "high|medium|low",
       "why_it_matters": ""
     }
@@ -100,7 +132,7 @@ The JSON must be COMPLETE — every opening brace must have a matching closing b
     {
       "call_type": "",
       "description": "",
-      "source_phrase": "",
+      "source_note": "",
       "confidence": "high|medium|low",
       "safety_note": ""
     }
@@ -108,7 +140,7 @@ The JSON must be COMPLETE — every opening brace must have a matching closing b
   "emotional_details": [
     {
       "detail": "",
-      "source_phrase": "",
+      "source_note": "",
       "confidence": "high|medium|low",
       "story_use": ""
     }

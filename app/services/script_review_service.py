@@ -19,6 +19,7 @@ from typing import Any
 from app.config import settings
 from app.services.claude_client import call_claude_agent, parse_package_response
 from app.services.prompt_utils import get_channel_rules
+from app.services.report_normalization_service import safe_join_report_items
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def _python_validate_approval(
                 else "language_issues" if field == "hindi_naturalness"
                 else f"{field}_issues"
             )
-            detail = ", ".join(quality_report.get(issue_key, [])[:2]) or "see full report"
+            detail = safe_join_report_items(quality_report.get(issue_key, []), limit=2, sep=", ") or "see full report"
             failures.append(
                 f"[{cost_mode.upper()}] Score {field}={score} below required {minimum}. "
                 f"Issues: {detail}"

@@ -51,6 +51,7 @@ def _build_claude_gate_evidence(
     originality_report: dict,
     dialogue_report: dict,
     metadata_report: dict,
+    transformation_plan: dict | None = None,
 ) -> dict:
     """
     Build a compact evidence dict from all Claude gate results.
@@ -90,14 +91,6 @@ def _build_claude_gate_evidence(
             "fact_issues":            quality_report.get("fact_issues", [])[:3],
         }
 
-    # Text Similarity Check (Python)
-    if similarity_report:
-        evidence["text_similarity"] = {
-            "risk_level":        similarity_report.get("risk_level", "unknown"),
-            "total_match_count": similarity_report.get("total_match_count", 0),
-            "high_risk_matches": similarity_report.get("high_risk_matches", 0),
-        }
-
     # Originality Safety Gate (Claude)
     if originality_report:
         evidence["originality_safety"] = {
@@ -135,6 +128,27 @@ def _build_claude_gate_evidence(
             "ending_payoff_score":   retention_report.get("ending_payoff_score", 0),
         }
 
+    # Originality Transformation Plan (compact summary only)
+    if transformation_plan:
+        evidence["originality_transformation"] = {
+            "source_dependency_risk": transformation_plan.get("source_dependency_risk", "unknown"),
+            "original_sections":      len(transformation_plan.get("original_story_structure", [])),
+            "phrases_to_avoid_count": len(transformation_plan.get("phrases_or_patterns_to_avoid", [])),
+            "writer_instructions":    transformation_plan.get("writer_instructions", [])[:3],
+            "metadata_originality_rules": transformation_plan.get("metadata_originality_rules", [])[:2],
+        }
+
+    # Enhanced text similarity — include structural risk fields if present
+    if similarity_report:
+        evidence["text_similarity"] = {
+            "risk_level":            similarity_report.get("risk_level", "unknown"),
+            "total_match_count":     similarity_report.get("total_match_count", 0),
+            "high_risk_matches":     similarity_report.get("high_risk_matches", 0),
+            "opening_sequence_risk": similarity_report.get("opening_sequence_risk", "unknown"),
+            "structure_risk_level":  similarity_report.get("structure_risk_level", "unknown"),
+            "summary":               similarity_report.get("summary", ""),
+        }
+
     return evidence
 
 
@@ -153,6 +167,7 @@ def run_openai_final_premium_gate(
     metadata_report: dict,
     review_dir: Path,
     label: str = "",
+    transformation_plan: dict | None = None,
 ) -> dict:
     """
     Run the combined OpenAI Final Premium Gate.
@@ -195,7 +210,7 @@ def run_openai_final_premium_gate(
         "legal_outcome":   fact_lock.get("legal_outcome", {}),
     }
 
-    # Build rich Claude gate evidence
+    # Build rich Claude gate evidence (includes transformation plan + enhanced similarity)
     claude_gate_evidence = _build_claude_gate_evidence(
         lint_report=lint_report,
         copyedit_report=copyedit_report,
@@ -205,6 +220,7 @@ def run_openai_final_premium_gate(
         originality_report=originality_report,
         dialogue_report=dialogue_report,
         metadata_report=metadata_report,
+        transformation_plan=transformation_plan,
     )
 
     # Extract youtube_metadata from script_draft (also sent separately for convenience)

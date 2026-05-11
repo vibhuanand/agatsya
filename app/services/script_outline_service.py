@@ -43,10 +43,15 @@ def _build_prompt(
     blueprint: dict,
     hinglish_level: int = 2,
     retention_blueprint: dict | None = None,
+    originality_transformation_plan: dict | None = None,
 ) -> str:
     template = _PROMPT_PATH.read_text(encoding="utf-8")
     retention_json = json.dumps(retention_blueprint or {}, ensure_ascii=False)
     has_retention = bool(retention_blueprint)
+
+    has_transformation = bool(originality_transformation_plan)
+    transformation_json = json.dumps(originality_transformation_plan or {}, ensure_ascii=False)
+
     replacements = {
         "{channel_rules}": get_channel_rules(),
         "{case_hint}": case_hint,
@@ -66,6 +71,16 @@ def _build_prompt(
             "curiosity_gap, viewer_payoff, and pattern_interrupt to each chunk."
             if has_retention else
             "No Retention Blueprint provided. Use standard narrative structure."
+        ),
+        "{originality_transformation_json}": transformation_json,
+        "{originality_transformation_note}": (
+            "An Originality Transformation Plan has been provided. "
+            "Use original_story_structure from the plan as the preferred section order "
+            "instead of the source transcript sequence. "
+            "Follow phrases_or_patterns_to_avoid and writer_instructions throughout."
+            if has_transformation else
+            "No Originality Transformation Plan provided. "
+            "Use the story_blueprint to define section order."
         ),
     }
     prompt = template
@@ -88,6 +103,7 @@ def run_script_outline(
     script_dir: Path,
     hinglish_level: int = 2,
     retention_blueprint: dict | None = None,
+    originality_transformation_plan: dict | None = None,
 ) -> dict:
     """
     Call the Script Outline Agent to produce a chunk-by-chunk plan.
@@ -108,6 +124,7 @@ def run_script_outline(
         blueprint=blueprint,
         hinglish_level=hinglish_level,
         retention_blueprint=retention_blueprint,
+        originality_transformation_plan=originality_transformation_plan,
     )
 
     raw_response, stop_reason = call_claude_agent(prompt, agent_name="script_outline")

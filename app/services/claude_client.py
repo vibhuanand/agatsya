@@ -174,26 +174,44 @@ def _extract_json(raw: str, agent_name: str = "agent") -> dict[str, Any]:
     try:
         return json.loads(json_str)
     except json.JSONDecodeError as exc:
-        # Last-resort: attempt to fix common LLM JSON issues
-        logger.warning("[%s] JSON parse failed (%s), attempting repair", agent_name, exc)
-        json_str = _repair_json(json_str)
+        # Pass 1: light-touch repair (trailing commas, smart quotes, control chars)
+        logger.warning("[%s] JSON parse failed (%s), attempting light repair", agent_name, exc)
+        repaired = _repair_json(json_str)
         try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as exc2:
-            raise ValueError(
-                f"[{agent_name}] Could not parse Claude response as JSON after repair attempt: {exc2}. "
-                f"Raw size: {len(original_raw)} chars. "
-                "Inspect the raw response file saved by the calling service."
-            ) from exc2
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Pass 2: json_repair library (handles unquoted keys, missing commas, etc.)
+        try:
+            from json_repair import repair_json  # type: ignore[import]
+            repaired2 = repair_json(json_str)
+            result = json.loads(repaired2) if isinstance(repaired2, str) else repaired2
+            if isinstance(result, dict):
+                logger.warning("[%s] JSON recovered via json_repair library", agent_name)
+                return result
+        except Exception as jr_exc:
+            logger.debug("[%s] json_repair attempt failed: %s", agent_name, jr_exc)
+
+        # All repair attempts exhausted
+        raise ValueError(
+            f"[{agent_name}] Could not parse Claude response as JSON after all repair attempts: {exc}. "
+            f"Raw size: {len(original_raw)} chars. "
+            "Inspect the raw response file saved by the calling service."
+        ) from exc
 
 
 def _repair_json(raw: str) -> str:
     """Light-touch JSON repair for common LLM output issues."""
     # Remove trailing commas before ] or }
     raw = re.sub(r",\s*([}\]])", r"\1", raw)
-    # Replace smart quotes
+    # Replace smart / curly quotes
     raw = raw.replace("“", '"').replace("”", '"')
     raw = raw.replace("‘", "'").replace("’", "'")
+    # Strip BOM if present
+    raw = raw.lstrip("﻿")
+    # Normalize invalid control characters (keep \t \n \r, strip the rest)
+    raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", raw)
     return raw
 
 
