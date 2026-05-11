@@ -31,14 +31,30 @@ def _build_trace(
     blocking_reasons: list[str] | None = None,
     gate_scores: dict | None = None,
     repair_telemetry: dict | None = None,
+    unresolved_issues: list[str] | None = None,
 ) -> dict:
+    _repair_tel = repair_telemetry or {
+        "repair_route":                "none",
+        "root_cause_count":            0,
+        "python_auto_fixes_count":     0,
+        "claude_grouped_repair_count": 0,
+        "estimated_model_calls_saved": 0,
+        "auto_rebuild_ran":            False,
+        "auto_rebuild_chunks":         0,
+        "avoided_openai_bulk_repair":  False,
+    }
     return {
-        "safe_to_voice":     safe_to_voice,
-        "status":            status,
-        "automation_status": status,
-        "elevenlabs_ready":  safe_to_voice,
-        "blocking_reasons":  blocking_reasons or [],
-        "gate_scores":       gate_scores or {
+        "safe_to_voice":           safe_to_voice,
+        "status":                  status,
+        "automation_status":       status,
+        "elevenlabs_ready":        safe_to_voice,
+        "elevenlabs_allowed":      safe_to_voice,
+        "blocking_reasons":        blocking_reasons or [],
+        "unresolved_issues":       unresolved_issues or [],
+        "repair_route":            _repair_tel.get("repair_route", "none"),
+        "python_auto_fixes_count": _repair_tel.get("python_auto_fixes_count", 0),
+        "auto_rebuild_ran":        _repair_tel.get("auto_rebuild_ran", False),
+        "gate_scores":             gate_scores or {
             "openai_final_premium_overall": None,
             "openai_final_premium_passed":  None,
             "hindi_copyedit_passed":        None,
@@ -46,16 +62,7 @@ def _build_trace(
             "metadata_passed":              None,
             "originality_passed":           None,
         },
-        "repair_telemetry":  repair_telemetry or {
-            "repair_route":                "none",
-            "root_cause_count":            0,
-            "python_auto_fixes_count":     0,
-            "claude_grouped_repair_count": 0,
-            "estimated_model_calls_saved": 0,
-            "auto_rebuild_ran":            False,
-            "auto_rebuild_chunks":         0,
-            "avoided_openai_bulk_repair":  False,
-        },
+        "repair_telemetry":  _repair_tel,
     }
 
 
@@ -64,7 +71,9 @@ def _build_trace(
 class TestTraceSchema:
     REQUIRED_TOP_LEVEL = [
         "safe_to_voice", "status", "automation_status", "elevenlabs_ready",
-        "blocking_reasons", "gate_scores", "repair_telemetry",
+        "elevenlabs_allowed", "blocking_reasons", "unresolved_issues",
+        "repair_route", "python_auto_fixes_count", "auto_rebuild_ran",
+        "gate_scores", "repair_telemetry",
     ]
     REQUIRED_GATE_SCORES = [
         "openai_final_premium_overall", "openai_final_premium_passed",
@@ -169,6 +178,11 @@ class TestElevenLabsCondition:
             trace = _build_trace(safe_to_voice=stv, status=status)
             assert trace["elevenlabs_ready"] == trace["safe_to_voice"]
 
+    def test_elevenlabs_allowed_matches_elevenlabs_ready(self):
+        for stv in [True, False]:
+            trace = _build_trace(safe_to_voice=stv, status="script_approved" if stv else "needs_human_review")
+            assert trace["elevenlabs_allowed"] == trace["elevenlabs_ready"]
+
 
 # ─── Test: automation_status matches status ───────────────────────────────────
 
@@ -215,6 +229,36 @@ class TestRepairTelemetry:
     def test_repair_route_is_string(self):
         trace = _build_trace(safe_to_voice=True, status="script_approved")
         assert isinstance(trace["repair_telemetry"]["repair_route"], str)
+
+    def test_top_level_repair_route_matches_telemetry(self):
+        telemetry = {
+            "repair_route":                "claude_grouped_repair",
+            "root_cause_count":            1,
+            "python_auto_fixes_count":     2,
+            "claude_grouped_repair_count": 1,
+            "estimated_model_calls_saved": 3,
+            "auto_rebuild_ran":            True,
+            "auto_rebuild_chunks":         2,
+            "avoided_openai_bulk_repair":  True,
+        }
+        trace = _build_trace(safe_to_voice=False, status="not_voice_ready_auto_retry_exhausted",
+                             repair_telemetry=telemetry)
+        assert trace["repair_route"] == "claude_grouped_repair"
+        assert trace["python_auto_fixes_count"] == 2
+        assert trace["auto_rebuild_ran"] is True
+
+    def test_unresolved_issues_empty_when_approved(self):
+        trace = _build_trace(safe_to_voice=True, status="script_approved", unresolved_issues=[])
+        assert trace["unresolved_issues"] == []
+
+    def test_unresolved_issues_populated_when_gates_fail(self):
+        trace = _build_trace(
+            safe_to_voice=False,
+            status="not_voice_ready_auto_retry_exhausted",
+            unresolved_issues=["openai_final_premium", "retention_quality"],
+        )
+        assert len(trace["unresolved_issues"]) == 2
+        assert "openai_final_premium" in trace["unresolved_issues"]
 
 
 # ─── Test: file write to review_dir ──────────────────────────────────────────
