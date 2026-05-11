@@ -1330,7 +1330,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                 # Gate failed but no targets to repair — human must fix manually
                 warnings.append(
                     "Hindi copyedit gate FAILED but no chunk_repair_targets provided. "
-                    "Manual review required before audio generation."
+                    "No repair targets available — gate marked failed."
                 )
 
         gate_summary["hindi_copyedit"] = {
@@ -1586,6 +1586,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                         f"Metadata quality gate recheck failed: {exc}."
                     )
                     metadata_repair_has_failures = True
+                    status = "not_voice_ready_auto_retry_exhausted"
 
             except Exception as exc:
                 logger.error("Metadata repair failed: %s", exc)
@@ -1630,7 +1631,8 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                 except Exception as exc:
                     logger.error("Retention quality gate failed: %s", exc)
                     warnings.append(
-                        f"Retention quality gate failed: {exc}. Manual review required."
+                        f"Retention quality gate call failed: {exc}. "
+                        "Gate marked failed — auto-rebuild will be attempted by OFP gate."
                     )
                     retention_report = {"approved": False, "error": str(exc), "chunk_repair_targets": []}
 
@@ -1739,6 +1741,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                                 f"Retention quality recheck failed: {exc}."
                             )
                             retention_repair_has_failures = True
+                            status = "not_voice_ready_auto_retry_exhausted"
 
                     except Exception as exc:
                         logger.error("Retention repair failed: %s", exc)
@@ -1747,6 +1750,7 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                             "Original chunks kept."
                         )
                         retention_repair_has_failures = True
+                        status = "not_voice_ready_auto_retry_exhausted"
                 else:
                     warnings.append(
                         "Retention quality gate FAILED but no chunk_repair_targets provided. "
@@ -2870,6 +2874,31 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
                 "safe_to_voice=False — do not run ElevenLabs until the final premium gate passes."
             )
 
+        # ── Finalize status from repair failure flags ──────────────────────────
+        # Any repair failure that hasn't already updated status must be reflected
+        # here — BEFORE all_gates_passed / safe_to_voice / trace are computed.
+        # This ensures the trace always captures the final status value.
+        if copyedit_repair_has_failures:
+            if not any("Copyedit repair had failures" in w for w in warnings):
+                warnings.append(
+                    "Copyedit repair had failures — original content kept in affected chunks. "
+                    "Do not run ElevenLabs. Automated retry exhausted — safe_to_voice=false. "
+                    "See 04-review/hindi_copyedit_repair_report.json."
+                )
+            if status not in ("needs_human_review", "not_voice_ready_auto_retry_exhausted"):
+                status = "not_voice_ready_auto_retry_exhausted"
+
+        # Belt-and-suspenders: any remaining repair failure flag that slipped through
+        # inline status updates also gets a terminal status here.
+        if not (
+            (not repair_has_failures)
+            and (not copyedit_repair_has_failures)
+            and (not metadata_repair_has_failures)
+            and (not retention_repair_has_failures)
+            and (not openai_repair_has_failures)
+        ) and status not in ("needs_human_review", "not_voice_ready_auto_retry_exhausted"):
+            status = "not_voice_ready_auto_retry_exhausted"
+
         # ── Final gate summary + safe_to_voice ────────────────────────────────
         # all_gates_passed checks every content gate entry currently in gate_summary.
         # repair_failures is added AFTER this check so it does not interfere.
@@ -3037,14 +3066,6 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
             )
         except Exception as _exc:
             logger.warning("Could not write safe_to_voice_decision_trace.json: %s", _exc)
-
-        if copyedit_repair_has_failures and not any("Copyedit repair had failures" in w for w in warnings):
-            warnings.append(
-                "Copyedit repair had failures — original content kept in affected chunks. "
-                "Do not run ElevenLabs. Automated retry exhausted — safe_to_voice=false. "
-                "See 04-review/hindi_copyedit_repair_report.json."
-            )
-            status = "not_voice_ready_auto_retry_exhausted"
 
         logger.info(
             "All gates — script=%s copyedit=%s retention=%s originality=%s dialogue=%s "

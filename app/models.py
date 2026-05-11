@@ -184,7 +184,7 @@ class PackageResponse(BaseModel):
     episode_id: str
     folder_name: str
     episode_dir: str
-    status: str = "script_approved"   # script_approved | needs_human_review | failed
+    status: str = "script_approved"   # script_approved | auto_repair_required | auto_rebuild_required | not_voice_ready_auto_retry_exhausted | needs_human_review | failed
     files: dict[str, str]
     quality_summary: Optional[QualitySummary] = None
     gate_summary: Optional[dict] = None   # premium gate results per gate

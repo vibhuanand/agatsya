@@ -383,7 +383,7 @@ def run_retention_repair(
         "total_words_after_repair": total_words,
         "repair_results":           repair_results,
         "warnings": (
-            [f"{len(failed)} retention repair(s) failed — original kept. Manual review required."]
+            [f"{len(failed)} retention repair(s) failed — original kept. Automated retry exhausted — safe_to_voice=false."]
             if has_failures else []
         ),
     }

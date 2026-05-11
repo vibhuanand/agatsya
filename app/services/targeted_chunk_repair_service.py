@@ -360,7 +360,7 @@ def _promote_and_save(
         "total_words_after_repair": total_words,
         "repair_results": repair_results,
         "warnings": (
-            [f"{failed_count} chunk(s) could not be repaired — original content kept. Human review required."]
+            [f"{failed_count} chunk(s) could not be repaired — original content kept. Automated retry exhausted — safe_to_voice=false."]
             if has_failures else []
         ),
     }

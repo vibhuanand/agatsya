@@ -297,7 +297,7 @@ def run_openai_targeted_chunk_repair(
         "warnings": (
             [
                 f"{len(failed)} chunk(s) could not be repaired by OpenAI — "
-                "original content kept. Manual review required."
+                "original content kept. Automated retry exhausted — safe_to_voice=false."
             ]
             if has_failures else []
         ),
