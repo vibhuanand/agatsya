@@ -566,7 +566,10 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     if existing_clean is not None:
         clean = existing_clean
     else:
-        clean = clean_transcript(inp.raw_transcript)
+        clean = clean_transcript(
+            inp.raw_transcript,
+            report_path=input_dir / "transcript_cleanup_report.json",
+        )
         clean_txt_path.write_text(clean, encoding="utf-8")
     logger.info("Clean transcript: %d chars", len(clean))
 
