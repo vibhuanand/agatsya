@@ -48,6 +48,8 @@ _STAGE_PROMPT_MAP: dict[str, str] = {
     "retention_quality":             "retention_quality_gate_agent.txt",
     "openai_premium_hindi_editor":   "openai_premium_hindi_editor_gate.txt",
     "openai_originality_youtube_risk": "openai_originality_youtube_risk_gate.txt",
+    # Originality transformation — before script outline
+    "originality_transformation":    "originality_transformation_agent.txt",
     # Repair stages — tracked in manifest so prompt drift is visible in audit
     "metadata_repair":               "metadata_repair_agent.txt",
     "targeted_chunk_repair":         "targeted_chunk_repair_agent.txt",

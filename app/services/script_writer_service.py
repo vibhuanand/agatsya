@@ -74,6 +74,7 @@ def run_script_writer(
     hinglish_level: int = 2,
     retention_blueprint: dict | None = None,
     case_glossary: dict | None = None,
+    originality_transformation_plan: dict | None = None,
 ) -> dict:
     """
     Orchestrate the 5-stage script generation pipeline.
@@ -110,6 +111,7 @@ def run_script_writer(
         script_dir=script_dir,
         hinglish_level=hinglish_level,
         retention_blueprint=retention_blueprint,
+        originality_transformation_plan=originality_transformation_plan,
     )
 
     chunk_specs = outline.get("chunks", [])
@@ -149,6 +151,7 @@ def run_script_writer(
             prev_last_sentence=prev_last_sentence,
             next_chunk_purpose=next_purpose,
             hinglish_level=hinglish_level,
+            originality_transformation_plan=originality_transformation_plan,
         )
 
         written_chunks.append(chunk_data)

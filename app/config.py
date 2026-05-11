@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     # until this flag is explicitly enabled.
     enable_full_pipeline: bool = False
 
+    # Originality Transformation Layer
+    # When true (default), runs the Originality Transformation Planner after fact_lock
+    # and before script_outline. The plan tells the writer how to create an original
+    # Hindi documentary episode rather than translating/paraphrasing the source transcript.
+    # Failure is non-fatal (logged as warning) but sets safe_to_voice=False.
+    # Set to false only for debugging script generation (not recommended for production).
+    originality_transformation_enabled: bool = True
+
+    # Maximum number of high-risk source-copy matches allowed before blocking safe_to_voice.
+    # "High-risk" = verbatim English phrase matches of 8+ words from the source transcript.
+    # 0 = any high-risk match blocks approval (strict mode, default).
+    # Increase only for cases where long proper-noun phrases are unavoidable (e.g. court names).
+    source_similarity_max_high_risk_matches: int = 0
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

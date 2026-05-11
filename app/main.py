@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import traceback
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -93,7 +94,25 @@ async def create_episode_package(inp: EpisodeInput) -> PackageResponse:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
-        logger.error("Package creation failed: %s", exc, exc_info=True)
+        logger.exception("Package creation failed: %s", exc)
+        # Save full traceback to episode review dir for post-mortem debugging
+        # (prevents blind failures after expensive paid model calls)
+        try:
+            tb_text = traceback.format_exc()
+            episode_dir = settings.episodes_dir / inp.episode_id
+            review_dir = episode_dir / "04-review"
+            if episode_dir.exists():
+                review_dir.mkdir(parents=True, exist_ok=True)
+                (review_dir / "_package_exception_traceback.txt").write_text(
+                    f"Package creation failed: {exc}\n\n{tb_text}",
+                    encoding="utf-8",
+                )
+                logger.info(
+                    "Exception traceback saved → %s",
+                    review_dir / "_package_exception_traceback.txt",
+                )
+        except Exception as save_exc:
+            logger.warning("Could not save exception traceback: %s", save_exc)
         raise HTTPException(status_code=500, detail=f"Package creation failed: {exc}")
 
 

@@ -48,6 +48,33 @@ SOURCE INPUT
 
 ---
 
+## Transcript as Reference, Not Script
+
+The source YouTube or podcast transcript is used **only for fact extraction** — it is never treated as a writing blueprint.
+
+After fact extraction, the system creates an **original Hindi documentary episode** using:
+
+- `originality_transformation_plan.json` — a Claude-generated plan that analyses the source transcript structure and specifies an original Hindi section order, original opening hook, original transitions, and original closing reflection. The writer is explicitly instructed not to follow the source sequence.
+- `story_blueprint.json` + `retention_blueprint.json` — structure and viewer-experience guides built from verified facts, not from source phrasing.
+- `narration_chunk_writer_agent` — each chunk is written with the originality mandate: *"You are not translating, paraphrasing, summarising, or scene-by-scene copying the source transcript."*
+
+**What is extracted from the transcript:** facts, timeline, people, locations, evidence, legal outcome, emotional anchors.
+
+**What is never copied:** source structure, source opening style, source section order, source jokes, creator catchphrases, sponsor language, outro phrases, or any creator-specific expression.
+
+### How copying risk is reduced
+
+| Layer | What it checks |
+|---|---|
+| Python text similarity | Verbatim English phrase overlaps (≥5 words). Blocks `safe_to_voice` if high-risk matches (≥8 words) exceed `SOURCE_SIMILARITY_MAX_HIGH_RISK_MATCHES`. |
+| Claude Originality Safety Gate | Original content risk, reused-content risk, structure independence |
+| OpenAI Final Premium Gate | Receives transformation plan + similarity report. Explicitly checks whether script feels like original documentary narration vs. a translation. Blocks `approved` + `safe_to_voice` if script is too close to source. |
+| `safe_to_voice` rule | `true` only when transformation plan exists, high-risk similarity is within limit, all gates pass, and no repair failures. |
+
+**Disclaimer:** No automated system can guarantee YouTube monetization or copyright safety. This layer significantly reduces risk by ensuring the final script is original Hindi documentary narration rather than a translation of the source, but human review is always recommended before publishing.
+
+---
+
 ## Cost Modes
 
 Every episode request includes a `cost_mode` field that controls how Claude plans the video and which production tools are used.

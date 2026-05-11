@@ -25,6 +25,7 @@ from pathlib import Path
 
 from app.services.claude_client import call_claude_agent, parse_package_response
 from app.services.prompt_utils import get_channel_rules
+from app.services.report_normalization_service import safe_join_report_items
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +58,12 @@ def _python_validate_gate(gate_report: dict) -> tuple[bool, list[str]]:
         if direction == "max" and score > threshold:
             failures.append(
                 f"[ORIGINALITY] {field}={score} exceeds maximum {threshold}. "
-                f"Issues: {', '.join(gate_report.get('copying_issues', [])[:2]) or 'see report'}"
+                f"Issues: {safe_join_report_items(gate_report.get('copying_issues', []), limit=2, sep=', ') or 'see report'}"
             )
         elif direction == "min" and score < threshold:
             failures.append(
                 f"[ORIGINALITY] {field}={score} below required {threshold}. "
-                f"Issues: {', '.join(gate_report.get('ad_safety_issues', [])[:2]) or 'see report'}"
+                f"Issues: {safe_join_report_items(gate_report.get('ad_safety_issues', []), limit=2, sep=', ') or 'see report'}"
             )
 
     return len(failures) == 0, failures
@@ -115,7 +116,8 @@ def run_originality_safety_gate(
 
     if not py_passed:
         gate_report["gate_passed"] = False
-        existing_fixes = gate_report.get("required_fixes", [])
+        from app.services.report_normalization_service import stringify_report_item
+        existing_fixes = [stringify_report_item(f) for f in gate_report.get("required_fixes", [])]
         gate_report["required_fixes"] = py_failures + [
             f for f in existing_fixes if f not in py_failures
         ]

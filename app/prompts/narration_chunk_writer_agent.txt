@@ -118,6 +118,22 @@ HINGLISH LEVEL 2 — CONSISTENCY
   Exception: official names ("Supreme Court of Canada", "Canada Health Act") stay as-is.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ORIGINALITY MANDATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You are NOT translating, paraphrasing, summarising, or scene-by-scene copying the source transcript.
+You are writing original Hindi documentary narration using fact_lock, story_blueprint,
+retention_blueprint, and originality_transformation_plan as your guides.
+
+Do NOT copy source phrasing, source jokes, sponsor language, outro style, or creator catchphrases.
+Do NOT follow the source transcript sequence mechanically.
+Use original section structure, original transitions, original Hindi explanation,
+and original emotional pacing as instructed in originality_plan_instructions below.
+Keep all verified facts accurate. Do not invent facts.
+
+ORIGINALITY PLAN INSTRUCTIONS FOR THIS CHUNK:
+{originality_plan_instructions}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WRITING RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Write in Devanagari Hindi. Apply hinglish_level {hinglish_level} (see level rules above).

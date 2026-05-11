@@ -51,18 +51,33 @@ Return the same JSON schema as the full fact_lock (legal_outcome may be empty if
 _FACT_LOCK_SCHEMA = """{
   "case_name": "",
   "source_summary": "",
-  "verified_people": [{"name": "", "role": "", "confidence": "high|medium|low", "source_phrase": ""}],
-  "verified_dates": [{"date_or_period": "", "event": "", "confidence": "high|medium|low", "source_phrase": ""}],
+  "verified_people": [{"name": "", "role": "", "confidence": "high|medium|low", "source_note": ""}],
+  "verified_dates": [{"date_or_period": "", "event": "", "confidence": "high|medium|low", "source_note": ""}],
   "verified_locations": [{"location": "", "context": "", "confidence": "high|medium|low"}],
-  "verified_timeline": [{"order": 1, "date_or_period": "", "event": "", "confidence": "high|medium|low", "source_phrase": ""}],
-  "legal_outcome": {"trial_result": "", "appeal_result": "", "supreme_court_or_final_result": "", "sentence_or_parole": "", "confidence": "high|medium|low", "source_phrase": ""},
-  "key_evidence_or_turning_points": [{"evidence": "", "source_phrase": "", "confidence": "high|medium|low", "why_it_matters": ""}],
-  "important_audio_or_call_moments": [{"call_type": "", "description": "", "source_phrase": "", "confidence": "high|medium|low", "safety_note": ""}],
-  "emotional_details": [{"detail": "", "source_phrase": "", "confidence": "high|medium|low", "story_use": ""}],
+  "verified_timeline": [{"order": 1, "date_or_period": "", "event": "", "confidence": "high|medium|low", "source_note": ""}],
+  "legal_outcome": {"trial_result": "", "appeal_result": "", "supreme_court_or_final_result": "", "sentence_or_parole": "", "confidence": "high|medium|low", "source_note": ""},
+  "key_evidence_or_turning_points": [{"evidence": "", "source_note": "", "confidence": "high|medium|low", "why_it_matters": ""}],
+  "important_audio_or_call_moments": [{"call_type": "", "description": "", "source_note": "", "confidence": "high|medium|low", "safety_note": ""}],
+  "emotional_details": [{"detail": "", "source_note": "", "confidence": "high|medium|low", "story_use": ""}],
   "recreated_scene_candidates": [{"scene_type": "", "why_useful": "", "safety_note": ""}],
   "facts_to_verify_externally": [{"fact": "", "reason": "", "confidence": "high|medium|low"}],
   "must_not_say": []
 }"""
+
+# Threshold above which we warn that the fact lock output is unexpectedly large
+_FACT_LOCK_LARGE_OUTPUT_CHARS = 25_000
+
+# Threshold above which we inject a compact-mode instruction into the prompt
+_COMPACT_NOTE_THRESHOLD_CHARS = 16_000
+
+_COMPACT_EXTRACTION_NOTE = (
+    "IMPORTANT — COMPACT MODE ACTIVE: This transcript view is large. "
+    "Extract only the most essential facts. "
+    "Do NOT produce an exhaustive timeline entry for every sentence. "
+    "Do NOT include every emotional detail. "
+    "Prioritise: key people, confirmed dates, legal outcome, top evidence, "
+    "and recreated scene candidates. Stay strictly within the hard output limits."
+)
 
 
 # ─── Research-view mode ───────────────────────────────────────────────────────
@@ -74,11 +89,18 @@ def _build_research_view_prompt(
     transcript_research_view: str,
 ) -> str:
     template = _PROMPT_PATH.read_text(encoding="utf-8")
+    # Inject compact-mode note when the research view is large
+    compact_note = (
+        _COMPACT_EXTRACTION_NOTE
+        if len(transcript_research_view) > _COMPACT_NOTE_THRESHOLD_CHARS
+        else ""
+    )
     replacements = {
         "{case_hint}": case_hint,
         "{episode_number}": episode_number,
         "{source_url}": source_url,
         "{transcript_research_view}": transcript_research_view,
+        "{compact_extraction_note}": compact_note,
     }
     prompt = template
     for key, value in replacements.items():
@@ -99,21 +121,49 @@ def _run_research_view_mode(
         source_url=source_url,
         transcript_research_view=transcript_research_view,
     )
+    logger.info(
+        "Fact Lock preflight: research_view=%d chars, prompt=%d chars, "
+        "compact_mode=%s, max_tokens=%d",
+        len(transcript_research_view),
+        len(prompt),
+        len(transcript_research_view) > _COMPACT_NOTE_THRESHOLD_CHARS,
+        settings.claude_max_tokens,
+    )
+
     raw_response, stop_reason = call_claude_agent(prompt, agent_name="fact_lock")
 
     raw_path = facts_dir / "_fact_lock_raw_response.txt"
     raw_path.write_text(raw_response, encoding="utf-8")
-    logger.info("Fact lock raw response saved → %s", raw_path)
+    logger.info("Fact lock raw response saved → %s  (%d chars)", raw_path, len(raw_response))
 
     if stop_reason == "max_tokens":
         logger.warning("fact_lock agent hit max_tokens — output may be truncated")
 
+    if len(raw_response) > _FACT_LOCK_LARGE_OUTPUT_CHARS:
+        logger.warning(
+            "fact_lock output is large (%d chars > %d threshold). "
+            "Consider using FACT_LOCK_MODE=segmented or compacting the prompt. "
+            "Continuing parse attempt.",
+            len(raw_response),
+            _FACT_LOCK_LARGE_OUTPUT_CHARS,
+        )
+
     try:
-        return parse_package_response(raw_response)
+        return parse_package_response(raw_response, agent_name="fact_lock")
     except ValueError as exc:
+        error_path = facts_dir / "_fact_lock_parse_error.txt"
+        try:
+            error_path.write_text(
+                f"Parse failed: {exc}\nRaw response: {raw_path}\n",
+                encoding="utf-8",
+            )
+            logger.error("Fact lock parse error saved → %s", error_path)
+        except Exception as save_exc:
+            logger.warning("Could not save fact_lock parse error file: %s", save_exc)
         raise ValueError(
             f"Fact Lock Agent JSON parse failed: {exc}\n"
-            f"Raw response saved at: {raw_path}"
+            f"Raw response saved at: {raw_path}\n"
+            f"Parse error details saved at: {error_path}"
         ) from exc
 
 
@@ -335,6 +385,16 @@ def run_fact_lock(
     Raises ValueError on failure (raw response already saved).
     """
     mode = (override_mode or settings.fact_lock_mode).lower().strip()
+
+    logger.info(
+        "Fact Lock: mode=%s, clean_transcript=%d chars, research_view=%d chars, "
+        "FACT_LOCK_MODE=%s, CLAUDE_MAX_TOKENS=%d",
+        mode,
+        len(clean_transcript),
+        len(transcript_research_view),
+        settings.fact_lock_mode,
+        settings.claude_max_tokens,
+    )
 
     if mode == "segmented" and clean_transcript:
         logger.info("Fact Lock: using SEGMENTED mode")
