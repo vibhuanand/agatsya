@@ -53,6 +53,32 @@ CHILD-VICTIM CASES — ADDITIONAL RULES:
   • safety_note in each short must explicitly confirm: no injury language, no suffering framing.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DELAYED REVELATION AND REVEAL PACING (mandatory for every case)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OPENING HOOK RULE
+• opening_hook must pose ONE central question — it must NOT reveal the final outcome,
+  the death, the verdict, or the killer's identity in the first section.
+• Do NOT write an opening_hook that states "वो मार दी गई" or "अपराधी X था" upfront.
+• Build opening_hook around: a question, a disappearance, a phone call, a contradiction,
+  a media-pressure moment, a failed institutional decision, or an emotional turning point.
+
+FIVE-ZONE REVEAL STRUCTURE
+retention_beats must follow this pacing map — assign each beat to the correct zone:
+  Zone 1 (first ~10% of episode):   setup, emotional stakes, central question. No outcome.
+  Zone 2 (10–35%):                   disappearance / initial call / first pressure. Escalation.
+  Zone 3 (35–65%):                   investigation, failed decisions, media escalation.
+  Zone 4 (65–85%):                   truth, legal outcome, verdict, perpetrator confirmed.
+  Zone 5 (final ~15%):               aftermath, reforms, reflection, moral weight.
+
+CURIOSITY ARCHITECTURE
+• Each retention_beat's curiosity_gap must leave a question open — never summarise what
+  just happened; always point forward.
+• viewer_promise must state WHAT QUESTION the viewer will have answered — not what they see.
+• Do not answer a Zone 4 question in a Zone 1 or Zone 2 beat.
+• Pacing is professional narrative structure, not manipulation. Do not invent uncertainty
+  where facts are confirmed. Do not create fake cliffhangers.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT — RETURN ONLY THIS JSON OBJECT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 No markdown. No explanation. No code fences. First character { Last character }

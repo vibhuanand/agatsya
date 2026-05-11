@@ -89,6 +89,23 @@ RETENTION RULES (apply when Retention Blueprint is provided):
 19. 001_hook must follow opening_hook and central_question from the Retention Blueprint.
 20. 010_closing must follow ending_strategy from the blueprint.
 
+REVEAL PACING RULES (apply to every script regardless of blueprints):
+21. 001_hook MUST NOT state the final death, outcome, verdict, or killer identity.
+    Build it around a question, a disappearance, a phone call, a contradiction, or a moment
+    of institutional failure. The hook opens the story — it does not summarise it.
+22. Assign reveal_zone to every chunk using these five zones:
+      zone_1 (first ~10% of words):  000_disclaimer, 001_hook, 002_victim_intro
+      zone_2 (10–35%):               003_first_question, early 004_events chunks
+      zone_3 (35–65%):               investigation, 005_janch, media escalation, 006_recreated_moment
+      zone_4 (65–85%):               007_turning_point, 008_adalati_outcome
+      zone_5 (final ~15%):           009_kyon_mayne_rakhta_hai, 010_closing
+23. Curiosity gaps for zone_1 and zone_2 chunks must leave a question open that is not answered
+    until zone_3 or zone_4. Do not reveal zone_4 answers in zone_1 or zone_2 chunks.
+24. Build suspense from institutional tension — failed handovers, unanswered questions, media
+    pressure, investigative errors — not from graphic body details or injury descriptions.
+25. The outline structure must be derived from story_blueprint.narrative_sections and the
+    originality_transformation_plan — NOT from the source transcript scene sequence.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -111,6 +128,7 @@ No markdown. No explanation. No code fences. No trailing commas.
       "must_include_points": [],
       "source_fact_refs": [],
       "safety_notes": [],
+      "reveal_zone": "zone_1",
       "retention_goal": "",
       "curiosity_gap": "",
       "viewer_payoff": "",

@@ -39,6 +39,16 @@ SUBSCRIBER CONVERSION
 • Is there a moment that feels premium enough to make a viewer subscribe?
 • Is the subscriber invitation (if any) at a high-engagement moment, not mid-exposition?
 
+REVEAL PACING AND DELAYED REVELATION
+• Does 001_hook create a central question rather than reveal the final outcome, death, or verdict?
+• Does the script withhold major outcomes (death, verdict, killer identity) until zone_4 (65–85%)?
+• Are major outcomes revealed gradually and respectfully — not front-loaded in the first section?
+• Does suspense come from institutional tension, timeline uncertainty, or moral stakes —
+  NOT from graphic violence, injury descriptions, or child suffering?
+• Does the script feel like an original documentary structure — not a scene-by-scene follow
+  of the source transcript reveal sequence?
+• Are there at least 2–3 genuine curiosity gaps that bridge sections and pull viewers forward?
+
 RETENTION BLUEPRINT ALIGNMENT
 • Does the script follow the opening_hook and central_question from the retention blueprint?
 • Are re_engagement_moments present in the chunks that correspond to those minutes?
@@ -146,6 +156,17 @@ EVALUATION INSTRUCTIONS
    - If retention is weak, add a re-engagement curiosity line suggestion every 2–3 chunks.
 8. For child-victim cases: if a chunk uses graphic injury as a hook or curiosity device, flag it
    as a HIGH-severity retention repair target with instruction to replace with institutional tension.
+9. FAIL the script with HIGH severity if any of the following are true:
+   a. The final death, outcome, verdict, or killer identity is revealed in 001_hook or
+      002_victim_intro without clear narrative justification — flag as "premature_outcome_reveal".
+   b. 001_hook is a flat chronological summary with no question, no curiosity, and no emotional
+      premise — flag as "flat_summary_opener".
+   c. Suspense in any chunk relies on graphic violence, physical injury descriptions, or
+      child suffering rather than institutional or procedural tension — flag as "graphic_suspense".
+   d. The script follows the source transcript scene-by-scene with no original structure — the
+      reveal sequence is the same order as the source — flag as "source_transcript_mirroring".
+   e. There are zero curiosity gaps or re-engagement moments across the entire episode —
+      flag as "no_curiosity_architecture".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT — RETURN ONLY THIS JSON OBJECT
@@ -166,7 +187,7 @@ No markdown. No explanation. No code fences.
   "issues": [
     {
       "chunk_id": "",
-      "issue_type": "weak_hook|slow_pacing|missing_curiosity_gap|weak_transition|weak_payoff|repetition|low_emotional_pull",
+      "issue_type": "weak_hook|slow_pacing|missing_curiosity_gap|weak_transition|weak_payoff|repetition|low_emotional_pull|premature_outcome_reveal|flat_summary_opener|graphic_suspense|source_transcript_mirroring|no_curiosity_architecture",
       "problem": "",
       "repair_instruction": "",
       "severity": "low|medium|high"

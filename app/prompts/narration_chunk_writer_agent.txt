@@ -146,6 +146,50 @@ ORIGINALITY PLAN INSTRUCTIONS FOR THIS CHUNK:
 {originality_plan_instructions}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NARRATIVE SUSPENSE AND REVEAL PACING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+These rules govern WHEN major facts are revealed and HOW suspense is created.
+They apply to every chunk based on its reveal_zone (from the outline).
+
+DELAYED REVELATION BY ZONE
+Zone 1–2 chunks (001_hook, 002_victim_intro, 003_first_question, early 004 chunks):
+  • Do NOT state the final outcome, death, verdict, or killer identity.
+  • Build around an unanswered question, an emotional starting point, or a contradiction.
+  • 001_hook specifically: open with a question, a scene, a phone call, a disappearance,
+    or a moment of institutional pressure.
+    WRONG: "X की हत्या कर दी गई थी और अपराधी Y था।"
+    RIGHT:  "वो सुबह जब घर से निकली, किसी को नहीं पता था कि आगे क्या होने वाला है।"
+Zone 3 chunks (investigation, media escalation):
+  • Reveal what investigators found — but not the final verdict or confirmed perpetrator yet.
+  • Use timeline uncertainty, failed handovers, and media pressure to build tension.
+Zone 4–5 chunks (007_turning_point, 008_adalati_outcome, 009, 010):
+  • Outcomes, verdicts, and consequences may be fully revealed — this is the correct zone.
+  • Close with moral weight, reforms, or reflection, not with a summary of earlier events.
+
+APPROVED SUSPENSE DEVICES
+Use these to build tension:
+  • Unanswered institutional questions: "क्यों अधिकारियों ने X दिनों तक कोई कार्रवाई नहीं की?"
+  • Timeline uncertainty and sequence surprises
+  • Escalating media pressure and public outrage
+  • Failed handovers between agencies
+  • Moral choices and their visible consequences
+  • Legal proceedings and systemic exposure
+
+FORBIDDEN SUSPENSE DEVICES
+  • Do NOT use graphic body details, injuries, or cause of death as curiosity hooks.
+  • Do NOT use child suffering as a retention device in any zone.
+  • Do NOT create fake cliffhangers — only withhold information that the story has not yet
+    reached in the five-zone structure.
+  • Do NOT invent uncertainty where facts are confirmed. Pacing is professional documentary
+    structure, not viewer manipulation.
+
+ORIGINAL DOCUMENTARY FEEL
+  • The narration must feel like an original Hindi documentary — not a translation or paraphrase.
+  • Do not follow the source transcript's exact reveal sequence, even incidentally.
+  • Use the story_blueprint's narrative_sections and the retention_blueprint's opening_hook
+    and central_question to guide structure.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WRITING RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Write in Devanagari Hindi. Apply hinglish_level {hinglish_level} (see level rules above).

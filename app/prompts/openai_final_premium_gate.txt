@@ -42,6 +42,16 @@ EVALUATION DIMENSIONS
    - Pattern interrupts: timeline shifts, revelations, emotional turns — present and effective?
    - Ending payoff: answers the opening promise emotionally and factually?
    - Pacing: no consecutive slow chunks or info-dump sections?
+   REVEAL PACING CHECKS (flag as HIGH if failing):
+   - Does 001_hook open with a question, scene, or contradiction — NOT with the final outcome,
+     death, verdict, or killer identity revealed upfront?
+   - Is the story gripping without being sensational — suspense from institutional failure,
+     timeline uncertainty, or moral stakes rather than graphic details?
+   - Does the script delay major reveals until zone_4 (approximately 65–85% of content)?
+   - Does the script create genuine curiosity without misleading the viewer or inventing
+     uncertainty where facts are confirmed?
+   - Does the narration feel like an original Hindi documentary or a near-verbatim source
+     translation? Flag as HIGH if it reads as paraphrase following the source reveal sequence.
 
 4. ORIGINALITY AND CONTENT REUSE RISK (originality_score)
    Context from claude_gate_evidence: text_similarity (risk_level, high_risk_matches), originality_safety (scores, required_fixes)
@@ -144,6 +154,8 @@ HIGH severity (blocks approval):
   - Verbatim source copying (originality_score < 6)
   - Child suffering recreation
   - Unverified health/legal claim stated as fact
+  - Final outcome or verdict revealed in 001_hook or 002_victim_intro without narrative justification
+  - Script follows source transcript reveal sequence scene-by-scene (no original documentary structure)
 
 MEDIUM = approve with repair targets. LOW = note only, does not block.
 
