@@ -78,6 +78,12 @@ _RULE_CADIAN = re.compile(r"Canadian\s+(?!Court|government|law|police|charter)",
                            re.UNICODE | re.IGNORECASE)
 _RULE_SIRF   = re.compile(r"यह\s+सिर्फ़?", re.UNICODE)
 
+# ── Child-victim sensitive-term rules (blocking in metadata; high in narration) ──
+_RULE_ORGAN_LIVER  = re.compile(r"फटा\s+हुआ\s+जिगर|जिगर\s+फट", re.UNICODE | re.IGNORECASE)
+_RULE_ENG_LIVER    = re.compile(r"\bruptured\s+liver\b", re.IGNORECASE)
+_RULE_MUTILATION   = re.compile(r"शरीर\s+के\s+टुकड़े|क्षत[–-]विक्षत|mutilat", re.UNICODE | re.IGNORECASE)
+_RULE_SEVERED_FIN  = re.compile(r"कटी\s+हुई\s+उँगली|severed\s+finger", re.UNICODE | re.IGNORECASE)
+
 
 _RULES: list[dict] = [
     {
@@ -168,6 +174,60 @@ _RULES: list[dict] = [
         "repetition":  True,
         "max_ok":      2,
     },
+    # ── Child-victim sensitive-term rules ────────────────────────────────────
+    {
+        "id":          "organ_liver_hindi",
+        "pattern":     _RULE_ORGAN_LIVER,
+        "severity":    "high",
+        "type":        "child_victim_safety",
+        "description": (
+            "Organ-specific injury language (फटा हुआ जिगर / जिगर फट) in narration — "
+            "replace with 'गंभीर आंतरिक चोटें' for child-victim cases"
+        ),
+        "suggested":   "गंभीर आंतरिक चोटें",
+        "repetition":  False,
+        "child_victim_only": True,
+    },
+    {
+        "id":          "organ_liver_english",
+        "pattern":     _RULE_ENG_LIVER,
+        "severity":    "high",
+        "type":        "child_victim_safety",
+        "description": (
+            "English organ-specific injury (ruptured liver) — "
+            "replace with 'serious internal injuries'"
+        ),
+        "suggested":   "serious internal injuries",
+        "repetition":  False,
+        "child_victim_only": True,
+    },
+    {
+        "id":          "mutilation_terms",
+        "pattern":     _RULE_MUTILATION,
+        "severity":    "high",
+        "type":        "child_victim_safety",
+        "description": (
+            "Mutilation/dismemberment wording (शरीर के टुकड़े / क्षत-विक्षत / mutilat...) "
+            "— must not appear in child-victim narration or metadata"
+        ),
+        "suggested":   "गंभीर चोटें (keep clinical and minimal)",
+        "repetition":  False,
+        "child_victim_only": True,
+    },
+    {
+        "id":          "severed_finger_repeated",
+        "pattern":     _RULE_SEVERED_FIN,
+        "severity":    "medium",
+        "type":        "child_victim_safety",
+        "description": (
+            "Severed-finger detail (कटी हुई उँगली / severed finger) — "
+            "may appear once for case mechanics but must not be repeated or used as a hook"
+        ),
+        "suggested":   "Mention once only; remove from hooks, metadata, and thumbnails",
+        "repetition":  True,
+        "max_ok":      1,
+        "child_victim_only": True,
+    },
 ]
 
 
@@ -195,6 +255,7 @@ def _full_narration_text(script_draft: dict) -> str:
 def run_hindi_text_lint(
     script_draft: dict,
     hinglish_level: int = 2,
+    is_child_victim_case: bool = False,
 ) -> dict:
     """
     Run all deterministic lint rules over the final Hindi script.
@@ -216,6 +277,10 @@ def run_hindi_text_lint(
     for rule in _RULES:
         # Skip Canada/Canadian consistency rules for hinglish_level >= 3
         if rule["id"] in ("canada_ke", "canadian_adj") and hinglish_level >= 3:
+            rules_skipped.append(rule["id"])
+            continue
+        # Skip child-victim-only rules when the case is not a child-victim case
+        if rule.get("child_victim_only", False) and not is_child_victim_case:
             rules_skipped.append(rule["id"])
             continue
 

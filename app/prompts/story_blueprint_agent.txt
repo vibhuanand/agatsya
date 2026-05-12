@@ -73,6 +73,50 @@ BLUEPRINT RULES
 9. closing_style: how should this episode close? (memorial detail, legacy, systemic lesson, final image)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NARRATIVE PACING AND REVEAL STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+These rules govern HOW the story reveals itself, not WHAT facts to include.
+
+DELAYED REVELATION
+• Do NOT place the final death, outcome, verdict, or killer identity in the opening section
+  unless the case framing makes it absolutely unavoidable.
+• The opening hook must be built around a question, a contradiction, a phone call, a moment
+  of institutional failure, or an emotional turning point — not a summary of the outcome.
+• Reveal major outcomes gradually and respectfully across sections.
+• Do not hide facts dishonestly. Do not invent uncertainty where facts are confirmed.
+  Pacing is about reveal order, not deception.
+
+FIVE-ZONE REVEAL STRUCTURE
+Map narrative_sections to these five zones and record zone in the schema field below:
+  Zone 1 — First 10%:   setup, emotional stakes, central question. No outcome revealed.
+  Zone 2 — 10–35%:      disappearance / initial call / first pressure. Escalation.
+  Zone 3 — 35–65%:      investigation, failed decisions, media escalation, institutional tension.
+  Zone 4 — 65–85%:      truth, legal consequences, verdict, perpetrator confirmed.
+  Zone 5 — Final 15%:   aftermath, reforms, reflection, moral weight.
+
+SUSPENSE DEVICES — USE THESE
+Build suspense from institutional and procedural tension, not graphic detail:
+  • Unanswered questions and timeline uncertainty
+  • Failed institutional handovers and investigative errors
+  • Media interference and escalating public pressure
+  • Moral choices and ethical failures
+  • Legal consequences and systemic exposure
+Do NOT use graphic body details, child suffering, or injury descriptions as suspense devices.
+
+OPENING HOOK QUESTION
+central_question must frame ONE clear narrative question that drives the episode, such as:
+  • "What went wrong that morning?"
+  • "Why did a private family crisis become a national media storm?"
+  • "How did a ransom case expose an entire system?"
+  • "When every camera was watching, who was actually protecting the victim?"
+
+ORIGINAL DOCUMENTARY STRUCTURE
+• narrative_sections must reflect an original documentary structure — NOT the source transcript
+  sequence. Do not preserve the source narrator's exact reveal order.
+• Use fact_lock, emotional_details, and key_evidence_or_turning_points to create our own
+  structure that serves the central_question.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Return ONLY a valid JSON object.
@@ -90,6 +134,7 @@ The JSON must be COMPLETE — every opening brace must have a matching closing b
       "section_order": 1,
       "section_name": "",
       "purpose": "",
+      "reveal_zone": "zone_1",
       "must_include_facts": []
     }
   ],

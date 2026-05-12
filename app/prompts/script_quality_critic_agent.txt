@@ -100,6 +100,15 @@ Any of these present in the script lowers hindi_naturalness automatically.
 • Unsupported legal superlatives such as "पहला मामला", "पहली बार", "पहले कभी नहीं",
   or "क़ानून बदल दिया" are safety/factual issues unless explicitly allowed by case_glossary.
 
+CHILD-VICTIM / MINOR-VICTIM SAFETY — FLAG IF VIOLATED:
+• Do NOT stack multiple graphic forensic details in one chunk.
+• Do NOT name specific internal organs unless legally essential. Use "गंभीर आंतरिक चोटें" instead.
+• Mention cause of death only ONCE if necessary — briefly and clinically. Flag if mentioned multiple times or graphically.
+• Do NOT allow body injury details used as hooks, curiosity gaps, or retention devices.
+• Taiwan-specific: "फटा हुआ जिगर" must be replaced with "गंभीर आंतरिक चोटें". Flag as safety issue.
+• Severed-finger detail and autopsy/internal injury detail must NOT appear in the same chunk.
+• Any violation = add chunk_repair_target with issue_type="safety" severity="high".
+
 Add each violation found as a chunk_repair_target with issue_type="hindi_naturalness".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -127,7 +136,7 @@ Check each of these (report in fact_issues if missing or wrong):
 WORD COUNT GUIDANCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Count all Hindi words across all hindi_narration_chunks combined.
-Estimate: word_count ÷ 120 = minutes.
+Estimate: word_count ÷ 110 = minutes.  (Hindi narration pace = 110 WPM)
 Report estimated_word_count and estimated_duration_min.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -174,6 +183,10 @@ issue_type values:
   safety                  — safety rule violation (missing label, graphic content, etc.)
   structure               — chunk is out of order, missing its purpose, or poorly anchored
   duration                — chunk is significantly over/under its target word count
+  case_glossary           — chunk uses incorrect, inconsistent, or unsafe names/terms/pronunciations
+                            compared with case_glossary.json (e.g. wrong victim/suspect name form,
+                            inconsistent place name, forbidden term, English/source spelling that
+                            should use the preferred Hindi/Hinglish form from case_glossary)
 
 Only list chunks that genuinely need repair. Do not list chunks that pass all checks.
 Do not put metadata, title, tags, thumbnail, or description issues into chunk_repair_targets.

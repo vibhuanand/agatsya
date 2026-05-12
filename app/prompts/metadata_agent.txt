@@ -46,11 +46,23 @@ METADATA RULES
 1. Write 3 title options. One must be the title_angle from the blueprint.
 2. Titles must be in Hindi. Clickable but honest. No sensationalism.
    recommended_title must be under 100 characters.
-3. BANNED from titles and description:
+3. BANNED from titles, tags, description, and thumbnail:
      "भारत की पहली", "सबसे भयानक", "आप यकीन नहीं करेंगे"
+     "most infamous", "most shocking", "most brutal", "सबसे कुख्यात", "सबसे डरावना"
      Any unverifiable superlative. Any graphic claim.
      Also avoid "पहला मामला", "पहली बार", "पहले कभी नहीं", and "क़ानून बदल दिया"
      unless case_glossary.legal_claim_rules.allow_first_case_claim is true.
+   LEGAL-BLAME BANNED PHRASES (never imply criminal culpability unless legally established):
+     "मीडिया का गुनाह", "journalism killed her", "media killed her", "media's fault"
+     Instead use: "पत्रकारिता पर सवाल", "media ethics", "एक देश का आत्ममंथन", "public outrage"
+   CHILD-VICTIM METADATA RULES:
+     Do NOT mention organ-specific injuries in title, thumbnail, or tags.
+     Do NOT use "फटा हुआ जिगर" or "ruptured liver" anywhere in metadata.
+     Do NOT use body injury details as a hook or thumbnail text.
+   PREFERRED FACTUAL FRAMING (for Taiwan/Pai Hsiao-Yen type cases):
+     Use: "Pai Hsiao-Yen case", "Taiwan 1997", "Taiwan kidnapping case", "media ethics case"
+     Use: "वह सुबह जिसने Taiwan को बदल दिया", "पत्रकारिता पर सवाल", "एक देश का आत्ममंथन"
+     Folder slug must be factual: "002-pai-hsiao-yen-taiwan-1997" not "002-taiwans-most-infamous-case"
 4. Description: 150–250 words. Hindi preferred. Cover:
      — What happened (1 paragraph, factual)
      — What the investigation found (1 paragraph)

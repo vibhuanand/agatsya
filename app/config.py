@@ -21,6 +21,19 @@ class Settings(BaseSettings):
     # Premium retention / revenue optimization
     premium_segmented_fact_lock_threshold: int = 30000
 
+    # Token / prompt budgeting (used by prompt_budget_service + model_rate_limiter_service)
+    # Conservative estimate: ceil(chars / 3.5) tokens.
+    # safe_claude_input_tokens_per_call: max input tokens sent to Claude in a single call.
+    # safe_claude_tokens_per_minute: rolling 60-second input-token ceiling (TPM guard).
+    safe_claude_input_tokens_per_call: int = 22000
+    safe_claude_tokens_per_minute: int = 30000
+
+    # Transcript size thresholds (clean_chars).
+    # long:      switch to segmented fact lock in auto mode.
+    # very_long: segmented is required; research_view likely truncates critical facts.
+    long_transcript_clean_chars_threshold: int = 30000
+    very_long_transcript_clean_chars_threshold: int = 60000
+
     # ElevenLabs
     elevenlabs_api_key: str = ""
     elevenlabs_narrator_voice_id: str = ""
@@ -99,6 +112,22 @@ class Settings(BaseSettings):
     # 0 = any high-risk match blocks approval (strict mode, default).
     # Increase only for cases where long proper-noun phrases are unavoidable (e.g. court names).
     source_similarity_max_high_risk_matches: int = 0
+
+    # ── Repair routing and auto-rebuild ──────────────────────────────────────────
+    # claude_repair_policy: "grouped_root_cause" = group issues into root causes before repair
+    #                        "per_chunk" = repair every individual chunk (legacy, expensive)
+    claude_repair_policy: str = "grouped_root_cause"
+    # Max root-cause groups passed to Claude in one grouped repair round.
+    # If more root causes exist than this limit, stop with not_voice_ready_auto_retry_exhausted.
+    max_claude_repair_targets_per_round: int = 4
+    # Max rounds of grouped Claude repair before stopping.
+    max_claude_repair_rounds: int = 1
+    # When true, run premium_section_rebuild_service when OAI targets > openai_repair_max_chunks.
+    auto_rebuild_enabled: bool = True
+    # Max rounds of auto-rebuild (Claude section rebuild + OAI recheck).
+    max_auto_rebuild_rounds: int = 1
+    # Max total chunk targets a rebuild is allowed to cover (safety cap).
+    max_auto_rebuild_targets: int = 12
 
     # App
     app_env: str = "development"

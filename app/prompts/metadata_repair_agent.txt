@@ -16,9 +16,15 @@ Common failures you must always check and correct:
   thumbnail_text of 2–5 words (non-graphic, non-exploitative).
 • Missing or weak tags — add 15–25 relevant Hindi and English tags covering: case name,
   victim name, location, crime type, year, channel name, "Hindi true crime", "सच्ची घटना".
-• Banned wording in titles — remove "भारत की पहली", "सबसे भयानक", "आप यकीन नहीं करेंगे",
-  "SHOCKING", "EXPOSED", "REVEALED", "चौंकाने वाला", "हैरान कर देगा".
+• Banned wording in titles/tags/thumbnail — remove "भारत की पहली", "सबसे भयानक", "आप यकीन नहीं करेंगे",
+  "SHOCKING", "EXPOSED", "REVEALED", "चौंकाने वाला", "हैरान कर देगा",
+  "most infamous", "most shocking", "most brutal", "सबसे कुख्यात", "सबसे डरावना".
 • Unverified superlatives — never claim "first", "worst", "most brutal" without fact_lock proof.
+• Legal-blame banned — remove "मीडिया का गुनाह", "journalism killed her", "media killed her".
+  Replace with: "पत्रकारिता पर सवाल", "media ethics", "public outrage".
+• Child-victim safety — remove organ-specific injury wording from all metadata fields.
+  Replace "फटा हुआ जिगर" with "गंभीर आंतरिक चोटें". Remove from title, tags, thumbnail, description.
+• Taiwan folder slug — use "002-pai-hsiao-yen-taiwan-1997" not "002-taiwans-most-infamous-case".
 • Weak shorts plan — if shorts_plan is empty or a placeholder, create 1–2 entry stubs with
   a realistic hook and source_section.
 • Factual errors in description — check every named fact against fact_lock. Fix wrong claims.

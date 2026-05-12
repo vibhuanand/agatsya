@@ -202,7 +202,7 @@ def call_openai_json(
             "_warning": (
                 f"OpenAI API call failed for agent '{agent_name}' — "
                 f"error saved to {err_path}. "
-                "Manual review required before audio generation."
+                "Re-run with REUSE_EXISTING_STAGE_OUTPUTS=false to retry the API call."
             ),
         }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,39 @@ import anthropic
 
 from app.config import settings
 from app.services import call_tracker
+
+# ─── Rate-limit retry constants ───────────────────────────────────────────────
+
+# Wait times (seconds) between successive retry attempts after a 429.
+# Attempt 1 → wait 20s → Attempt 2 → wait 45s → Attempt 3 → wait 90s → exhausted.
+_RATE_LIMIT_RETRY_DELAYS: list[int] = [20, 45, 90]
+
+
+class RateLimitExhaustedError(RuntimeError):
+    """
+    Raised when all retry attempts after a 429 RateLimitError are exhausted.
+
+    Attributes:
+        agent_name: the agent that failed.
+        retry_count: number of retries attempted (always == len(_RATE_LIMIT_RETRY_DELAYS)).
+        last_exception: the final anthropic.RateLimitError that caused exhaustion.
+    """
+
+    def __init__(
+        self,
+        agent_name: str,
+        retry_count: int,
+        last_exception: anthropic.RateLimitError,
+    ) -> None:
+        self.agent_name    = agent_name
+        self.retry_count   = retry_count
+        self.last_exception = last_exception
+        super().__init__(
+            f"Claude RateLimitError exhausted after {retry_count} retries "
+            f"for agent '{agent_name}'. "
+            "Re-run the pipeline when Anthropic capacity recovers, or reduce "
+            "SAFE_CLAUDE_TOKENS_PER_MINUTE in .env."
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -278,15 +312,34 @@ def call_claude(
 
 def call_claude_agent(prompt: str, agent_name: str = "agent") -> tuple[str, str]:
     """
-    Generic single-call agent interface.
+    Generic single-call agent interface with 429 retry/backoff.
+
     Accepts a fully-built prompt string and returns (raw_response_text, stop_reason).
     Use this for all multi-agent pipeline steps.
     Does NOT parse JSON — caller must save raw response before parsing.
 
     Increments the pipeline call counter (MAX_TOTAL_MODEL_CALLS budget guard).
     Raises BudgetExceededError before making the API call if the limit is exceeded.
+
+    429 handling:
+      - On RateLimitError, waits _RATE_LIMIT_RETRY_DELAYS[attempt] seconds and retries.
+      - Up to len(_RATE_LIMIT_RETRY_DELAYS) = 3 retries (4 total attempts).
+      - On exhaustion raises RateLimitExhaustedError — the pipeline converts this to
+        status=rate_limited_retry_later with safe_to_voice=false.
+
+    Model rate limiter (optional):
+      - Registers the call with model_rate_limiter_service BEFORE the API call.
+      - The limiter sleeps if the rolling 60-second token budget is exceeded.
+      - Import is deferred to avoid a circular import at module load time.
     """
     call_tracker.inc_claude(agent_name)
+
+    # Notify the rolling-window rate limiter before sending (non-fatal if unavailable)
+    try:
+        from app.services.model_rate_limiter_service import rate_limiter  # noqa: PLC0415
+        rate_limiter.before_call(prompt, agent_name=agent_name)
+    except Exception as rl_exc:  # noqa: BLE001
+        logger.debug("model_rate_limiter not available: %s", rl_exc)
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
@@ -296,30 +349,69 @@ def call_claude_agent(prompt: str, agent_name: str = "agent") -> tuple[str, str]
         settings.claude_model,
     )
 
-    message = client.messages.create(
-        model=settings.claude_model,
-        max_tokens=settings.claude_max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+    last_rate_limit_exc: anthropic.RateLimitError | None = None
+
+    for attempt in range(len(_RATE_LIMIT_RETRY_DELAYS) + 1):  # attempts: 0, 1, 2, 3
+        if attempt > 0:
+            delay = _RATE_LIMIT_RETRY_DELAYS[attempt - 1]
+            logger.warning(
+                "Claude RateLimitError (429) — waiting %ds before retry %d/%d (agent='%s')",
+                delay,
+                attempt,
+                len(_RATE_LIMIT_RETRY_DELAYS),
+                agent_name,
+            )
+            time.sleep(delay)
+
+        try:
+            message = client.messages.create(
+                model=settings.claude_model,
+                max_tokens=settings.claude_max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            raw_response = message.content[0].text
+            stop_reason  = message.stop_reason
+
+            logger.info(
+                "Agent '%s' response: %d chars, stop_reason=%s",
+                agent_name,
+                len(raw_response),
+                stop_reason,
+            )
+
+            if stop_reason == "max_tokens":
+                logger.warning(
+                    "Agent '%s' hit max_tokens (%d) — output may be truncated.",
+                    agent_name,
+                    settings.claude_max_tokens,
+                )
+
+            # Notify rate limiter of successful call for telemetry
+            try:
+                from app.services.model_rate_limiter_service import rate_limiter  # noqa: PLC0415
+                rate_limiter.after_call(prompt, agent_name=agent_name)
+            except Exception:  # noqa: BLE001
+                pass
+
+            return raw_response, stop_reason
+
+        except anthropic.RateLimitError as exc:
+            last_rate_limit_exc = exc
+            logger.warning(
+                "RateLimitError on attempt %d/%d for agent '%s': %s",
+                attempt + 1,
+                len(_RATE_LIMIT_RETRY_DELAYS) + 1,
+                agent_name,
+                exc,
+            )
+
+    # All retries exhausted
+    raise RateLimitExhaustedError(
+        agent_name=agent_name,
+        retry_count=len(_RATE_LIMIT_RETRY_DELAYS),
+        last_exception=last_rate_limit_exc,  # type: ignore[arg-type]
     )
-
-    raw_response = message.content[0].text
-    stop_reason = message.stop_reason
-
-    logger.info(
-        "Agent '%s' response: %d chars, stop_reason=%s",
-        agent_name,
-        len(raw_response),
-        stop_reason,
-    )
-
-    if stop_reason == "max_tokens":
-        logger.warning(
-            "Agent '%s' hit max_tokens (%d) — output may be truncated.",
-            agent_name,
-            settings.claude_max_tokens,
-        )
-
-    return raw_response, stop_reason
 
 
 def call_claude_agent_cached(
@@ -358,37 +450,62 @@ def call_claude_agent_cached(
         settings.claude_model,
     )
 
-    message = client.messages.create(
-        model=settings.claude_model,
-        max_tokens=settings.claude_max_tokens,
-        system=[
-            {
-                "type": "text",
-                "text": system_content,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_content}],
+    last_rate_limit_exc: anthropic.RateLimitError | None = None
+
+    for attempt in range(len(_RATE_LIMIT_RETRY_DELAYS) + 1):
+        if attempt > 0:
+            delay = _RATE_LIMIT_RETRY_DELAYS[attempt - 1]
+            logger.warning(
+                "Claude RateLimitError (429) [cached] — waiting %ds before retry %d/%d (agent='%s')",
+                delay, attempt, len(_RATE_LIMIT_RETRY_DELAYS), agent_name,
+            )
+            time.sleep(delay)
+
+        try:
+            message = client.messages.create(
+                model=settings.claude_model,
+                max_tokens=settings.claude_max_tokens,
+                system=[
+                    {
+                        "type": "text",
+                        "text": system_content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[{"role": "user", "content": user_content}],
+            )
+
+            raw_response = message.content[0].text
+            stop_reason  = message.stop_reason
+
+            logger.info(
+                "Agent '%s' [cached] response: %d chars, stop_reason=%s",
+                agent_name,
+                len(raw_response),
+                stop_reason,
+            )
+
+            if stop_reason == "max_tokens":
+                logger.warning(
+                    "Agent '%s' [cached] hit max_tokens (%d) — output may be truncated.",
+                    agent_name,
+                    settings.claude_max_tokens,
+                )
+
+            return raw_response, stop_reason
+
+        except anthropic.RateLimitError as exc:
+            last_rate_limit_exc = exc
+            logger.warning(
+                "RateLimitError [cached] on attempt %d/%d for agent '%s': %s",
+                attempt + 1, len(_RATE_LIMIT_RETRY_DELAYS) + 1, agent_name, exc,
+            )
+
+    raise RateLimitExhaustedError(
+        agent_name=agent_name,
+        retry_count=len(_RATE_LIMIT_RETRY_DELAYS),
+        last_exception=last_rate_limit_exc,  # type: ignore[arg-type]
     )
-
-    raw_response = message.content[0].text
-    stop_reason = message.stop_reason
-
-    logger.info(
-        "Agent '%s' [cached] response: %d chars, stop_reason=%s",
-        agent_name,
-        len(raw_response),
-        stop_reason,
-    )
-
-    if stop_reason == "max_tokens":
-        logger.warning(
-            "Agent '%s' [cached] hit max_tokens (%d) — output may be truncated.",
-            agent_name,
-            settings.claude_max_tokens,
-        )
-
-    return raw_response, stop_reason
 
 
 def parse_package_response(raw_response: str, agent_name: str = "agent") -> dict[str, Any]:
