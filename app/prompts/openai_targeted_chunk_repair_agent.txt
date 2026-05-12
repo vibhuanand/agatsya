@@ -68,18 +68,27 @@ ORIGINALITY (if issue_type = openai_originality_youtube_risk)
 13. Do not reproduce long phrases from the source transcript.
 14. The repaired chunk must be clearly original — not a paraphrase of source audio.
 
+SOURCE-COPY / RECONSTRUCTION REPAIR
+If issue_type is source_shaped_reconstruction, exact_source_quote_copy,
+source_sequence_copy, or explicit_sensitive_violence:
+19. Remove copied English source wording. Do not preserve exact documentary or podcast lines.
+20. Rebuild the target chunk as original Hindi documentary narration using legal/evidence framing.
+21. Do not follow the source reveal sequence mechanically.
+22. Do not recreate play-by-play crime mechanics, sexual violence, restraint detail, body positioning, or graphic injury detail.
+23. If a quote is legally important, describe its meaning in Hindi rather than copying the original wording.
+
 LEGAL LANGUAGE
-15. Legal narration must be accessible to a general Hindi audience.
+24. Legal narration must be accessible to a general Hindi audience.
     Preferred: अदालत, सज़ा, दोषसिद्धि, मुक़दमा, गिरफ़्तारी, ज़मानत
     Avoid over-Sanskritised compounds the viewer would not understand.
 
 TONE AND RHYTHM
-16. Premium documentary tone — grave, clear, precise. Not sensational.
-17. Sentences must have natural spoken rhythm. Mix short and long sentences.
-18. No markdown, no bold, no italics, no headers in the text field.
+25. Premium documentary tone — grave, clear, precise. Not sensational.
+26. Sentences must have natural spoken rhythm. Mix short and long sentences.
+27. No markdown, no bold, no italics, no headers in the text field.
 
 WORD COUNT
-19. estimated_words must reflect the ACTUAL word count of the repaired text.
+28. estimated_words must reflect the ACTUAL word count of the repaired text.
     Count Hindi words including compound words separated by spaces.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

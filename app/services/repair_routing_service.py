@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,8 @@ _RETENTION_PATTERNS = [
 _ORIGINALITY_PATTERNS = [
     "originality", "verbatim", "copy", "paraphrase", "source",
     "copying_risk", "reused_content_risk", "transformative_value",
+    "source-shaped", "source_shaped_reconstruction", "exact_source_quote_copy",
+    "source quote", "source sequence", "reconstruction",
 ]
 
 _HINDI_QUALITY_PATTERNS = [
@@ -76,6 +79,21 @@ _CASE_GLOSSARY_PATTERNS = [
     "case_glossary", "glossary", "wrong name", "incorrect name", "inconsistent name",
     "forbidden term", "preferred hindi", "preferred hinglish", "pronunciation",
     "name form", "place name", "victim name", "suspect name", "spelling",
+]
+
+_SOURCE_COPY_RECONSTRUCTION_TYPES = {
+    "source_shaped_reconstruction",
+    "exact_source_quote_copy",
+    "explicit_sensitive_violence",
+    "source_sequence_copy",
+}
+
+_RELATED_CLUSTER_MARKERS = [
+    "investigation", "discovery", "reconstruction", "confession",
+    "interrogation", "court", "evidence", "timeline", "aftermath",
+    "crime", "incident", "attack", "assault", "murder", "killing",
+    "जाँच", "तलाश", "अदालत", "साक्ष्य", "सबूत", "समयरेखा",
+    "हत्या", "हमला", "घटना",
 ]
 
 
@@ -105,6 +123,46 @@ def _issue_to_area(text: str) -> str:
     return "general"
 
 
+def _stable_hash(value: object, length: int = 10) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:length]
+
+
+def _chunk_probe(chunk: dict) -> str:
+    return " ".join(
+        str(chunk.get(k, ""))
+        for k in ("chunk_id", "section_title", "purpose", "summary", "tone")
+    ).lower()
+
+
+def _is_related_cluster_chunk(chunk: dict) -> bool:
+    probe = _chunk_probe(chunk)
+    return any(marker.lower() in probe for marker in _RELATED_CLUSTER_MARKERS)
+
+
+def _cluster_chunk_ids(chunk_id: str, chunks: list[dict], max_cluster_size: int) -> list[str]:
+    """Return the failed chunk plus nearby semantically related chunks."""
+    ids = [c.get("chunk_id", "") for c in chunks]
+    if chunk_id not in ids:
+        return [chunk_id] if chunk_id else []
+    idx = ids.index(chunk_id)
+    cluster = [chunk_id]
+    for offset in (1, -1, 2, -2, 3, -3):
+        if len(cluster) >= max_cluster_size:
+            break
+        ni = idx + offset
+        if ni < 0 or ni >= len(chunks):
+            continue
+        candidate = chunks[ni]
+        cid = candidate.get("chunk_id", "")
+        if cid and _is_related_cluster_chunk(candidate) and cid not in cluster:
+            if offset < 0:
+                cluster.insert(0, cid)
+            else:
+                cluster.append(cid)
+    return cluster[:max_cluster_size]
+
+
 def _preferred_owner(area: str, is_deterministic: bool) -> str:
     """Choose the cheapest repair owner for an area."""
     if is_deterministic or area in ("metadata", "child_victim_safety", "recreated_dialogue"):
@@ -120,6 +178,9 @@ def run_repair_routing(
     all_gate_reports: dict[str, dict],
     openai_repair_max_chunks: int,
     review_dir: Path | None = None,
+    script_draft: dict | None = None,
+    max_cluster_size: int = 4,
+    previous_root_cause_attempts: dict[str, int] | None = None,
 ) -> dict:
     """
     Analyse all gate reports and OpenAI repair targets, group them into root causes,
@@ -144,6 +205,9 @@ def run_repair_routing(
     openai_targets: list[dict] = []
     unrecoverable: list[str] = []
     notes: list[str] = []
+    source_clusters: list[dict] = []
+    previous_attempts = previous_root_cause_attempts or {}
+    chunks = (script_draft or {}).get("hindi_narration_chunks", [])
 
     # ── Extract all OAI repair targets ───────────────────────────────────────
     ofp_report = all_gate_reports.get("openai_final_premium", {})
@@ -209,9 +273,56 @@ def run_repair_routing(
     # Python preflight
     pf = all_gate_reports.get("python_preflight", {})
     for issue in pf.get("issues", []):
-        txt = issue.get("description", "") or str(issue)
+        txt = issue.get("problem", "") or issue.get("description", "") or str(issue)
         sev = issue.get("severity", "low")
-        all_issues.append({"text": txt, "severity": sev, "source": "python_preflight"})
+        all_issues.append({
+            "text": txt,
+            "severity": sev,
+            "source": "python_preflight",
+            "chunk_id": issue.get("chunk_id", ""),
+            "issue_type": issue.get("type", ""),
+            "raw_issue": issue,
+        })
+
+    # Source-copy / reconstruction targets from deterministic Python preflight.
+    # These are clustered so Claude/OpenAI repairs the risky section shape, not
+    # just one isolated sentence.
+    for target in pf.get("chunk_repair_targets", []):
+        issue_type = target.get("issue_type", "")
+        if issue_type not in _SOURCE_COPY_RECONSTRUCTION_TYPES:
+            continue
+        chunk_id = target.get("chunk_id", "")
+        cluster_ids = _cluster_chunk_ids(chunk_id, chunks, max_cluster_size)
+        key_kind = (
+            "exact_source_quote_copy"
+            if issue_type == "exact_source_quote_copy"
+            else "source_shaped_reconstruction"
+        )
+        root_key = f"{key_kind}:{_stable_hash(cluster_ids or [chunk_id])}"
+        attempts = previous_attempts.get(root_key, 0)
+        source_clusters.append({
+            "repair_type": "source_copy_reconstruction_cluster",
+            "preferred_repair_owner": (
+                "openai"
+                if attempts >= 1
+                else "claude_first_then_openai_if_still_blocked"
+            ),
+            "target_chunk_ids": cluster_ids,
+            "chunk_ids": cluster_ids,
+            "root_cause": (
+                "source-shaped reconstruction / exact source quote / explicit "
+                "safety wording / reused-content risk"
+            ),
+            "root_cause_key": root_key,
+            "prior_claude_attempts": attempts,
+            "issue_type": issue_type,
+            "problem": target.get("problem", ""),
+            "instruction": (
+                "Rebuild as original Hindi documentary narration using legal/evidence "
+                "framing. Do not preserve source sequence, source dialogue, or source "
+                "reveal structure."
+            ),
+        })
 
     # OAI final premium gate issues (includes unrecoverable high-severity issues)
     for issue in ofp_report.get("issues", []):
@@ -302,10 +413,52 @@ def run_repair_routing(
                 "repair_instruction": repair_instr[:400],
             })
 
+    # ── Source-copy / reconstruction clusters override isolated chunk repair ──
+    claude_skipped_due_previous_failure = False
+    openai_cluster_targets: list[dict] = []
+    for cluster in source_clusters:
+        cluster_ids = cluster.get("target_chunk_ids", [])[:max_cluster_size]
+        root_key = cluster.get("root_cause_key", "")
+        if cluster.get("prior_claude_attempts", 0) >= 1:
+            claude_skipped_due_previous_failure = True
+            cid_set = set(cluster_ids)
+            claude_targets = [
+                t for t in claude_targets
+                if not (cid_set & set(t.get("chunk_ids", [])))
+            ]
+            for cid in cluster_ids:
+                openai_cluster_targets.append({
+                    "chunk_id": cid,
+                    "issue_type": cluster.get("issue_type", "source_shaped_reconstruction"),
+                    "problem": cluster.get("problem") or cluster.get("root_cause", ""),
+                    "repair_instruction": cluster.get("instruction", ""),
+                    "root_cause_key": root_key,
+                    "repair_type": cluster.get("repair_type"),
+                })
+        else:
+            cid_set = set(cluster_ids)
+            claude_targets = [
+                t for t in claude_targets
+                if not (cid_set & set(t.get("chunk_ids", [])))
+            ]
+            claude_targets.append({
+                "root_cause_id": root_key,
+                "root_cause_key": root_key,
+                "area": "originality",
+                "severity": "high",
+                "chunk_ids": cluster_ids,
+                "repair_type": cluster.get("repair_type"),
+                "preferred_repair_owner": cluster.get("preferred_repair_owner"),
+                "root_cause": cluster.get("root_cause"),
+                "repair_instruction": cluster.get("instruction", ""),
+            })
+
     # ── Determine OAI targets ─────────────────────────────────────────────────
     # Only route to OpenAI if total unique chunk targets <= limit
     unique_oai_chunks = list({t.get("chunk_id", "") for t in raw_oai_targets if t.get("chunk_id")})
-    if len(unique_oai_chunks) <= openai_repair_max_chunks and not claude_targets:
+    if openai_cluster_targets:
+        openai_targets = openai_cluster_targets[:openai_repair_max_chunks]
+    elif len(unique_oai_chunks) <= openai_repair_max_chunks and not claude_targets:
         # Small enough for direct OpenAI targeted repair
         openai_targets = raw_oai_targets
     else:
@@ -348,6 +501,14 @@ def run_repair_routing(
         "python_fixes": list(set(python_fixes))[:20],
         "claude_repair_targets": claude_targets,
         "openai_repair_targets": openai_targets,
+        "source_copy_reconstruction_clusters": source_clusters,
+        "claude_repair_skipped_due_previous_failure": claude_skipped_due_previous_failure,
+        "repeat_root_cause_detected": [
+            c.get("root_cause_key", "") for c in source_clusters
+            if c.get("prior_claude_attempts", 0) >= 1
+        ],
+        "source_shaped_reconstruction_detected": bool(source_clusters),
+        "reconstruction_cluster_count": len(source_clusters),
         "estimated_model_calls_saved": estimated_calls_saved,
         "unrecoverable_issues": unrecoverable,
         "notes": notes,

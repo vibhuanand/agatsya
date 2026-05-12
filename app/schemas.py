@@ -395,6 +395,10 @@ class ChunkRepairTarget(BaseModel):
         "structure",
         "duration",
         "case_glossary",
+        "source_shaped_reconstruction",
+        "exact_source_quote_copy",
+        "explicit_sensitive_violence",
+        "source_sequence_copy",
     ]
     problem: str
     repair_instruction: str
