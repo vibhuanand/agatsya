@@ -20,8 +20,15 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
+from app.schemas import NarrationChunk
 from app.services.claude_client import call_claude_agent, parse_package_response
 from app.services.prompt_utils import get_channel_rules
+from app.services.script_assembler_service import (
+    _extract_full_narration,
+    _extract_elevenlabs_chunks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +64,12 @@ def _merge_rebuilt_chunks(
 
 
 def _assemble_full_narration(chunks: list[dict]) -> str:
-    """Join all chunk texts into a single narration string."""
-    return "\n\n".join(c.get("text", "") for c in chunks if c.get("text"))
+    """Join all chunk texts into a single narration string.
+
+    Delegates to the shared assembler helper so the format stays consistent
+    across all pipeline stages (includes section titles).
+    """
+    return _extract_full_narration(chunks)
 
 
 # ─── Public entry point ───────────────────────────────────────────────────────
@@ -179,9 +190,9 @@ def run_premium_section_rebuild(
             f"Raw response saved at: {raw_path}"
         ) from exc
 
-    rebuilt_chunks: list[dict] = rebuild_result.get("rebuilt_chunks", [])
+    rebuilt_chunks_raw: list[dict] = rebuild_result.get("rebuilt_chunks", [])
 
-    if not rebuilt_chunks:
+    if not rebuilt_chunks_raw:
         logger.warning("Premium section rebuild: Claude returned no rebuilt chunks")
         report = {
             "rebuilt_count": 0,
@@ -190,6 +201,50 @@ def run_premium_section_rebuild(
             "child_victim_safety_applied": rebuild_result.get("child_victim_safety_applied", False),
             "rebuild_notes": rebuild_result.get("rebuild_notes", ""),
             "warning": "Claude returned no rebuilt chunks",
+        }
+        return script_draft, report
+
+    # ── Validate each rebuilt chunk before merging ────────────────────────────
+    # A chunk that fails NarrationChunk schema validation is skipped rather than
+    # merged — rebuilt_count counts only valid chunks so callers can trust the
+    # number.  Failures are recorded in the report for auditability.
+    rebuilt_chunks: list[dict] = []
+    invalid_rebuilt: list[dict] = []
+    for _rc in rebuilt_chunks_raw:
+        try:
+            NarrationChunk.model_validate(_rc)
+            rebuilt_chunks.append(_rc)
+        except ValidationError as _ve:
+            _cid = _rc.get("chunk_id", "?")
+            logger.warning(
+                "Premium rebuild: chunk %s failed NarrationChunk validation — skipping merge: %s",
+                _cid, str(_ve)[:200],
+            )
+            invalid_rebuilt.append({
+                "chunk_id":            _cid,
+                "validation_error":    str(_ve)[:300],
+                "raw_keys":            list(_rc.keys()),
+            })
+
+    if invalid_rebuilt:
+        logger.warning(
+            "Premium rebuild: %d/%d rebuilt chunk(s) failed validation and were skipped",
+            len(invalid_rebuilt), len(rebuilt_chunks_raw),
+        )
+
+    if not rebuilt_chunks:
+        logger.warning(
+            "Premium rebuild: all %d rebuilt chunk(s) failed validation — no merge performed",
+            len(rebuilt_chunks_raw),
+        )
+        report = {
+            "rebuilt_count":   0,
+            "target_chunk_ids": target_ids,
+            "root_cause_count": len(root_causes),
+            "invalid_rebuilt_chunks": invalid_rebuilt,
+            "child_victim_safety_applied": rebuild_result.get("child_victim_safety_applied", False),
+            "rebuild_notes": rebuild_result.get("rebuild_notes", ""),
+            "warning": "All rebuilt chunks failed NarrationChunk schema validation",
         }
         return script_draft, report
 
@@ -203,26 +258,55 @@ def run_premium_section_rebuild(
     full_narration = _assemble_full_narration(updated_chunks)
     updated_draft["hindi_narration_full"] = full_narration
 
-    # Persist updated chunk files
+    # ── Persist updated outputs to 03-script/ ────────────────────────────────
+    # script_final.json, narration chunks, full text, and ElevenLabs chunks
+    # must all be in sync after rebuild so downstream stages read consistent data.
+    elevenlabs_chunks = _extract_elevenlabs_chunks(updated_chunks)
     try:
-        chunks_path = script_dir / "hindi_narration_chunks.json"
-        chunks_path.write_text(
+        (script_dir / "script_final.json").write_text(
+            json.dumps(updated_draft, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (script_dir / "hindi_narration_chunks.json").write_text(
             json.dumps(updated_chunks, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        full_path = script_dir / "hindi_narration_full.txt"
-        full_path.write_text(full_narration, encoding="utf-8")
+        (script_dir / "hindi_narration_full.txt").write_text(full_narration, encoding="utf-8")
+        (script_dir / "elevenlabs_chunks.json").write_text(
+            json.dumps(elevenlabs_chunks, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     except Exception as save_exc:
-        logger.warning("Could not persist rebuilt chunk files: %s", save_exc)
+        logger.warning("Could not persist rebuilt 03-script/ files: %s", save_exc)
+
+    # ── Mirror to 02-package/ so downstream reads are consistent ─────────────
+    # 02-package/ is the backward-compat location read by the renderer and
+    # other tooling.  Rebuild must write here too — same data, same format.
+    pkg_dir = script_dir.parent / "02-package"
+    if pkg_dir.exists():
+        try:
+            (pkg_dir / "hindi_narration_chunks.json").write_text(
+                json.dumps(updated_chunks, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            (pkg_dir / "hindi_narration_full.txt").write_text(full_narration, encoding="utf-8")
+            (pkg_dir / "elevenlabs_chunks.json").write_text(
+                json.dumps(elevenlabs_chunks, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            (pkg_dir / "production_package.json").write_text(
+                json.dumps(updated_draft, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            logger.info("Premium rebuild — mirrored outputs to 02-package/")
+        except Exception as pkg_exc:
+            logger.warning("Could not mirror rebuilt files to 02-package/: %s", pkg_exc)
 
     report: dict[str, Any] = {
-        "rebuilt_count": len(rebuilt_chunks),
-        "target_chunk_ids": target_ids,
-        "rebuilt_chunk_ids": [c.get("chunk_id", "") for c in rebuilt_chunks],
-        "root_cause_count": len(root_causes),
-        "root_causes_addressed": rebuild_result.get("root_causes_addressed", []),
+        "rebuilt_count":              len(rebuilt_chunks),   # only valid chunks
+        "target_chunk_ids":           target_ids,
+        "rebuilt_chunk_ids":          [c.get("chunk_id", "") for c in rebuilt_chunks],
+        "root_cause_count":           len(root_causes),
+        "root_causes_addressed":      rebuild_result.get("root_causes_addressed", []),
         "child_victim_safety_applied": rebuild_result.get("child_victim_safety_applied", False),
-        "rebuild_notes": rebuild_result.get("rebuild_notes", ""),
-        "stop_reason": stop_reason,
+        "rebuild_notes":              rebuild_result.get("rebuild_notes", ""),
+        "stop_reason":                stop_reason,
+        "invalid_rebuilt_chunks":     invalid_rebuilt,
+        "invalid_rebuilt_count":      len(invalid_rebuilt),
     }
 
     out_path = review_dir / "premium_section_rebuild_report.json"

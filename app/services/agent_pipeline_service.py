@@ -27,6 +27,8 @@ Idempotency (REUSE_EXISTING_STAGE_OUTPUTS=true):
 """
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import logging
 import re
@@ -277,8 +279,149 @@ def _try_load_existing(path: Path, stage_name: str, **kwargs: Any) -> dict | Non
     return _try_load_existing_json(path, stage_name, **kwargs)
 
 
+def _compute_script_hash(script: dict) -> str:
+    """Return a short SHA-256 hex digest of the script's narration chunks.
+
+    Kept for backward-compatibility.  New code should use
+    _compute_final_review_input_hash which covers the full OFP input set.
+    """
+    chunks = script.get("hindi_narration_chunks", [])
+    payload = json.dumps(chunks, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+@dataclasses.dataclass
+class ArtifactState:
+    """Tracks which final-review artifacts have been mutated since gates last ran.
+
+    Any stage that modifies script narration, youtube_metadata, or recreated_dialogues
+    must call the appropriate mark_*_mutated() method so that downstream helpers
+    (_finalize_reports_before_openai, Stage 14a) know to refresh gate reports.
+    """
+
+    script_mutated: bool = False
+    metadata_mutated: bool = False
+    dialogue_mutated: bool = False
+    final_review_inputs_mutated: bool = False
+    mutation_sources: list = dataclasses.field(default_factory=list)
+
+    def mark_script_mutated(self, source: str) -> None:
+        self.script_mutated = True
+        self.final_review_inputs_mutated = True
+        if source not in self.mutation_sources:
+            self.mutation_sources.append(source)
+
+    def mark_metadata_mutated(self, source: str) -> None:
+        self.metadata_mutated = True
+        self.final_review_inputs_mutated = True
+        if source not in self.mutation_sources:
+            self.mutation_sources.append(source)
+
+    def mark_dialogue_mutated(self, source: str) -> None:
+        self.dialogue_mutated = True
+        self.final_review_inputs_mutated = True
+        if source not in self.mutation_sources:
+            self.mutation_sources.append(source)
+
+    def to_dict(self) -> dict:
+        return {
+            "script_mutated":               self.script_mutated,
+            "metadata_mutated":             self.metadata_mutated,
+            "dialogue_mutated":             self.dialogue_mutated,
+            "final_review_inputs_mutated":  self.final_review_inputs_mutated,
+            "mutation_sources":             list(self.mutation_sources),
+        }
+
+
+def _compute_final_review_input_hash(
+    *,
+    script_final: dict,
+    hinglish_level: int = 2,
+    target_duration_min: int = 10,
+    lint_report: dict | None = None,
+    similarity_report: dict | None = None,
+    copyedit_report: dict | None = None,
+    quality_report: dict | None = None,
+    retention_report: dict | None = None,
+    originality_report: dict | None = None,
+    dialogue_report: dict | None = None,
+    metadata_report: dict | None = None,
+    fact_lock: dict | None = None,
+    blueprint: dict | None = None,
+    retention_blueprint: dict | None = None,
+    originality_transformation_plan: dict | None = None,
+) -> str:
+    """Return a 16-char hex digest that covers everything OpenAI Final Premium Gate reviews.
+
+    The hash includes:
+    - hindi_narration_chunks         (script text changed after repair/rebuild)
+    - youtube_metadata               (metadata changed after metadata repair)
+    - recreated_dialogues            (dialogue changed after targeted repair)
+    - hinglish_level, target_duration_min
+    - Compact identity hashes of: fact_lock, blueprint, retention_blueprint,
+      originality_transformation_plan
+    - Content hashes of each supporting gate report passed into OFP:
+      lint, similarity, copyedit, quality, retention, originality, dialogue, metadata
+
+    Saved as ``final_review_input_hash`` in openai_final_premium_report.json.
+    OFP is reused only when this hash exactly matches the stored value.
+    """
+
+    def _report_sig(r: dict | None) -> str:
+        """Return a short signature for a gate report using full canonical JSON.
+
+        Uses the complete report dict (sorted keys) so that any content change —
+        including required_fixes text, high_risk_matches, issue lists, etc. —
+        produces a different hash and forces OFP to rerun.
+
+        A missing or refresh_failed report returns the sentinel "none" which
+        can never collide with a valid report hash.
+        """
+        if not r or r.get("refresh_failed"):
+            return "none"
+        return hashlib.sha256(
+            json.dumps(r, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:8]
+
+    def _plan_sig(p: dict | None) -> str:
+        if not p:
+            return "none"
+        return hashlib.sha256(
+            json.dumps(p, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:8]
+
+    payload = {
+        # Script content
+        "narration_chunks":    script_final.get("hindi_narration_chunks", []),
+        "youtube_metadata":    script_final.get("youtube_metadata", {}),
+        "recreated_dialogues": script_final.get("recreated_dialogues", {}),
+        # Run parameters
+        "hinglish_level":      hinglish_level,
+        "target_duration_min": target_duration_min,
+        # Blueprint/plan identity (compact)
+        "fact_lock_sig":       _plan_sig(fact_lock),
+        "blueprint_sig":       _plan_sig(blueprint),
+        "retention_bp_sig":    _plan_sig(retention_blueprint),
+        "transform_plan_sig":  _plan_sig(originality_transformation_plan),
+        # Supporting gate report signatures
+        "lint_sig":            _report_sig(lint_report),
+        "similarity_sig":      _report_sig(similarity_report),
+        "copyedit_sig":        _report_sig(copyedit_report),
+        "quality_sig":         _report_sig(quality_report),
+        "retention_sig":       _report_sig(retention_report),
+        "originality_sig":     _report_sig(originality_report),
+        "dialogue_sig":        _report_sig(dialogue_report),
+        "metadata_sig":        _report_sig(metadata_report),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def _gate_passed_for_safe_to_voice(name: str, gate: dict) -> bool:
     """Return whether a gate entry should be treated as passing for safe_to_voice.
+
+    Stale markers (refresh_failed, stale_after_mutation, stale_after_rebuild) always
+    return False regardless of the passed field — stale evidence cannot approve a script.
 
     python_preflight uses the blocking field (not passed) as its blocking signal.
     passed=False for any issue (including low-only warnings), but blocking=False
@@ -287,9 +430,34 @@ def _gate_passed_for_safe_to_voice(name: str, gate: dict) -> bool:
 
     All other gates use their passed field directly.
     """
+    # Stale evidence must never count as a passing gate
+    if (gate.get("refresh_failed")
+            or gate.get("stale_after_mutation")
+            or gate.get("stale_after_rebuild")):
+        return False
     if name == "python_preflight":
         return not gate.get("blocking", True)
     return gate.get("passed", False)
+
+
+# Explicit allowlist of gates that must all pass for safe_to_voice=True.
+#
+# gate_summary also holds telemetry entries (repair_routing, auto_fix,
+# pre_oai_repair, repair_telemetry, repair_failures, automation_status,
+# safe_to_voice) that do NOT have a `passed` field and must NEVER affect
+# all_gates_passed.  Iterating over gate_summary.items() directly would
+# cause those entries to falsely block approval.
+REQUIRED_SAFE_TO_VOICE_GATES: tuple[str, ...] = (
+    "originality_transformation",
+    "script_quality",
+    "python_preflight",
+    "hindi_copyedit",
+    "originality_safety",
+    "recreated_dialogue",
+    "metadata_quality",
+    "retention_quality",
+    "openai_final_premium",
+)
 
 
 def _reload_latest_gate_reports(
@@ -336,6 +504,474 @@ def _reload_latest_gate_reports(
         _load("recreated_dialogue_gate_report.json",   dialogue_report),
         _load("metadata_quality_gate_report.json",     metadata_report),
     )
+
+
+def _refresh_reports_after_script_mutation(
+    *,
+    script_final: dict,
+    fact_lock: dict,
+    blueprint: dict,
+    review_dir: Path,
+    gate_summary: dict,
+    warnings: list[str],
+    # Current in-memory report objects — returned unchanged on exception
+    lint_report: dict,
+    similarity_report: dict,
+    quality_report: dict,
+    copyedit_report: dict,
+    # Required for similarity + originality gates
+    source_transcript: str = "",
+    # Optional inputs used only when those gates are requested
+    hinglish_level: int = 2,
+    case_glossary: dict | None = None,
+    retention_report: dict | None = None,
+    retention_blueprint: dict | None = None,
+    originality_report: dict | None = None,
+    dialogue_report: dict | None = None,
+    metadata_report: dict | None = None,
+    target_duration_min: int = 10,
+    cost_mode: str = "standard",
+    is_final_review: bool = True,
+    # Feature flags — caller decides which expensive gates to rerun
+    rerun_lint: bool = True,
+    rerun_similarity: bool = True,
+    rerun_quality: bool = False,
+    rerun_copyedit: bool = False,
+    rerun_retention: bool = False,
+    rerun_originality: bool = False,
+    rerun_dialogue: bool = False,
+    rerun_metadata: bool = False,
+) -> dict:
+    """Refresh gate reports after any flow that mutates script_final or narration chunks.
+
+    Must be called after every path that mutates script text or package content:
+    - deterministic auto-fix that changed narration/metadata/recreated dialogue
+    - premium_section_rebuild
+    - pre-OAI Claude repair (Stage 13d)
+    - OpenAI targeted repair that mutated narration or metadata
+    - metadata repair
+    - retention repair that changed narration
+
+    Returns a dict with refreshed report objects:
+    {
+        "lint_report":        <dict>,
+        "similarity_report":  <dict>,
+        "quality_report":     <dict>,
+        "copyedit_report":    <dict>,
+        "retention_report":   <dict | None>,
+        "originality_report": <dict | None>,
+        "dialogue_report":    <dict | None>,
+        "metadata_report":    <dict | None>,
+    }
+
+    Each refreshed report carries "refreshed_after_script_mutation": True.
+    Reports that were not rerun are returned as-is from the caller.
+
+    When a required input is missing and the gate cannot run, a structured
+    failure marker is returned:
+    {
+        "passed":         False,
+        "stale":          True,
+        "refresh_failed": True,
+        "reason":         "missing required input: <name>",
+    }
+
+    On any other exception the original in-memory dict is kept and a warning
+    is appended — the report is NOT silently promoted as fresh.
+    """
+    _MARKER = "refreshed_after_script_mutation"
+    _STALE_FAILURE = lambda reason: {  # noqa: E731
+        "passed": False,
+        "stale": True,
+        "refresh_failed": True,
+        "reason": reason,
+    }
+
+    result: dict[str, dict | None] = {
+        "lint_report":        lint_report,
+        "similarity_report":  similarity_report,
+        "quality_report":     quality_report,
+        "copyedit_report":    copyedit_report,
+        "retention_report":   retention_report,
+        "originality_report": originality_report,
+        "dialogue_report":    dialogue_report,
+        "metadata_report":    metadata_report,
+    }
+
+    # ── Lint (Python-only, no API call) ───────────────────────────────────────
+    if rerun_lint:
+        try:
+            fresh_lint = run_hindi_text_lint(
+                script_draft=script_final,
+                hinglish_level=hinglish_level,
+            )
+            fresh_lint[_MARKER] = True
+            (review_dir / "hindi_text_lint_report.json").write_text(
+                json.dumps(fresh_lint, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            result["lint_report"] = fresh_lint
+        except Exception as _exc:
+            warnings.append(f"hindi_text_lint refresh failed after script mutation: {_exc}")
+            result["lint_report"] = _STALE_FAILURE(
+                f"hindi_text_lint refresh exception: {_exc}"
+            )
+
+    # ── Text similarity (Python-only, needs source_transcript) ───────────────
+    if rerun_similarity:
+        if not source_transcript:
+            _fail = _STALE_FAILURE("missing required input: source_transcript")
+            result["similarity_report"] = _fail
+            warnings.append(
+                "text_similarity refresh skipped after script mutation: "
+                "source_transcript not supplied — similarity_report is stale."
+            )
+        else:
+            try:
+                fresh_sim = run_text_similarity_check(
+                    source_transcript=source_transcript,
+                    script_draft=script_final,
+                )
+                fresh_sim[_MARKER] = True
+                (review_dir / "text_similarity_report.json").write_text(
+                    json.dumps(fresh_sim, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                result["similarity_report"] = fresh_sim
+            except Exception as _exc:
+                warnings.append(f"text_similarity refresh failed after script mutation: {_exc}")
+                result["similarity_report"] = _STALE_FAILURE(
+                    f"text_similarity refresh exception: {_exc}"
+                )
+
+    # ── Script quality (expensive Claude call, opt-in) ────────────────────────
+    if rerun_quality:
+        try:
+            fresh_quality = run_script_review(
+                target_duration_min=target_duration_min,
+                cost_mode=cost_mode,
+                fact_lock=fact_lock,
+                blueprint=blueprint,
+                script_draft=script_final,
+                review_dir=review_dir,
+                is_final_review=is_final_review,
+                hinglish_level=hinglish_level,
+                case_glossary=case_glossary,
+            )
+            fresh_quality[_MARKER] = True
+            (review_dir / "final_script_quality_report.json").write_text(
+                json.dumps(fresh_quality, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            result["quality_report"] = fresh_quality
+            gate_summary["script_quality"] = {
+                "passed": fresh_quality.get("approved", False),
+                "scores": fresh_quality.get("scores", {}),
+                _MARKER:  True,
+            }
+        except Exception as _exc:
+            warnings.append(f"script_quality refresh failed after script mutation: {_exc}")
+            result["quality_report"] = _STALE_FAILURE(
+                f"script_quality refresh exception: {_exc}"
+            )
+
+    # ── Hindi copyedit (expensive Claude call, opt-in) ────────────────────────
+    if rerun_copyedit:
+        try:
+            fresh_copy = run_hindi_copyedit_gate(
+                script_draft=script_final,
+                fact_lock=fact_lock,
+                blueprint=blueprint,
+                hinglish_level=hinglish_level,
+                lint_report=result.get("lint_report") or lint_report,
+                review_dir=review_dir,
+            )
+            fresh_copy[_MARKER] = True
+            (review_dir / "hindi_copyedit_report.json").write_text(
+                json.dumps(fresh_copy, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            result["copyedit_report"] = fresh_copy
+            gate_summary["hindi_copyedit"] = {
+                "passed": fresh_copy.get("approved", False),
+                _MARKER:  True,
+            }
+        except Exception as _exc:
+            warnings.append(f"hindi_copyedit refresh failed after script mutation: {_exc}")
+            result["copyedit_report"] = _STALE_FAILURE(
+                f"hindi_copyedit refresh exception: {_exc}"
+            )
+
+    # ── Retention quality (needs retention_blueprint + target_duration_min) ───
+    if rerun_retention:
+        if retention_blueprint is None:
+            _fail = _STALE_FAILURE("missing required input: retention_blueprint")
+            result["retention_report"] = _fail
+            warnings.append(
+                "retention_quality refresh skipped after script mutation: "
+                "retention_blueprint not supplied — retention_report is stale."
+            )
+        else:
+            try:
+                fresh_ret = run_retention_quality_gate(
+                    script_draft=script_final,
+                    retention_blueprint=retention_blueprint,
+                    blueprint=blueprint,
+                    target_duration_min=target_duration_min,
+                    review_dir=review_dir,
+                )
+                fresh_ret[_MARKER] = True
+                (review_dir / "retention_quality_report.json").write_text(
+                    json.dumps(fresh_ret, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                result["retention_report"] = fresh_ret
+                gate_summary["retention_quality"] = {
+                    "passed": fresh_ret.get("approved", False),
+                    _MARKER:  True,
+                }
+            except Exception as _exc:
+                warnings.append(
+                    f"retention_quality refresh failed after script mutation: {_exc}"
+                )
+                result["retention_report"] = _STALE_FAILURE(
+                    f"retention_quality refresh exception: {_exc}"
+                )
+
+    # ── Originality safety (needs source_transcript + similarity_report) ──────
+    if rerun_originality:
+        _curr_sim = result.get("similarity_report") or similarity_report
+        if not source_transcript:
+            _fail = _STALE_FAILURE("missing required input: source_transcript")
+            result["originality_report"] = _fail
+            warnings.append(
+                "originality_safety refresh skipped after script mutation: "
+                "source_transcript not supplied — originality_report is stale."
+            )
+        elif _curr_sim and _curr_sim.get("refresh_failed"):
+            _fail = _STALE_FAILURE(
+                "dependency refresh_failed: similarity_report is stale — "
+                "originality_safety requires a fresh similarity_report"
+            )
+            result["originality_report"] = _fail
+            warnings.append(
+                "originality_safety refresh skipped: similarity_report refresh failed — "
+                "originality_report is stale."
+            )
+        else:
+            try:
+                fresh_orig = run_originality_safety_gate(
+                    script_draft=script_final,
+                    source_transcript=source_transcript,
+                    similarity_report=_curr_sim or {},
+                    review_dir=review_dir,
+                )
+                fresh_orig[_MARKER] = True
+                (review_dir / "originality_safety_gate_report.json").write_text(
+                    json.dumps(fresh_orig, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                result["originality_report"] = fresh_orig
+                gate_summary["originality_safety"] = {
+                    "passed": fresh_orig.get("approved", fresh_orig.get("gate_passed", False)),
+                    _MARKER:  True,
+                }
+            except Exception as _exc:
+                warnings.append(
+                    f"originality_safety refresh failed after script mutation: {_exc}"
+                )
+                result["originality_report"] = _STALE_FAILURE(
+                    f"originality_safety refresh exception: {_exc}"
+                )
+
+    # ── Recreated dialogue (needs fact_lock only) ─────────────────────────────
+    if rerun_dialogue:
+        try:
+            fresh_dial = run_recreated_dialogue_quality_gate(
+                script_draft=script_final,
+                fact_lock=fact_lock,
+                review_dir=review_dir,
+            )
+            fresh_dial[_MARKER] = True
+            (review_dir / "recreated_dialogue_gate_report.json").write_text(
+                json.dumps(fresh_dial, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            result["dialogue_report"] = fresh_dial
+            gate_summary["recreated_dialogue"] = {
+                "passed": fresh_dial.get("approved", fresh_dial.get("gate_passed", False)),
+                _MARKER:  True,
+            }
+        except Exception as _exc:
+            warnings.append(
+                f"recreated_dialogue refresh failed after script mutation: {_exc}"
+            )
+            result["dialogue_report"] = _STALE_FAILURE(
+                f"recreated_dialogue refresh exception: {_exc}"
+            )
+
+    # ── Metadata quality (needs fact_lock only) ───────────────────────────────
+    if rerun_metadata:
+        try:
+            fresh_meta = run_metadata_quality_gate(
+                script_draft=script_final,
+                fact_lock=fact_lock,
+                review_dir=review_dir,
+            )
+            fresh_meta[_MARKER] = True
+            (review_dir / "metadata_quality_gate_report.json").write_text(
+                json.dumps(fresh_meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            result["metadata_report"] = fresh_meta
+            gate_summary["metadata_quality"] = {
+                "passed": fresh_meta.get("approved", fresh_meta.get("gate_passed", False)),
+                _MARKER:  True,
+            }
+        except Exception as _exc:
+            warnings.append(
+                f"metadata_quality refresh failed after script mutation: {_exc}"
+            )
+            result["metadata_report"] = _STALE_FAILURE(
+                f"metadata_quality refresh exception: {_exc}"
+            )
+
+    return result
+
+
+def _finalize_reports_before_openai(
+    *,
+    artifact_state: "ArtifactState",
+    script_final: dict,
+    fact_lock: dict,
+    blueprint: dict,
+    review_dir: "Path",
+    gate_summary: dict,
+    warnings: list,
+    lint_report: dict,
+    similarity_report: dict,
+    copyedit_report: dict,
+    quality_report: dict,
+    retention_report: dict | None = None,
+    originality_report: dict | None = None,
+    dialogue_report: dict | None = None,
+    metadata_report: dict | None = None,
+    source_transcript: str = "",
+    hinglish_level: int = 2,
+    target_duration_min: int = 10,
+    retention_blueprint: dict | None = None,
+    case_glossary: dict | None = None,
+    cost_mode: str = "standard",
+) -> dict:
+    """Mandatory gate-report freshness check run directly before Stage 14a OFP.
+
+    When artifact_state reports that any final-review artifact was mutated since
+    the last gate run, this function determines which reports are now stale and
+    attempts to refresh cheap gates (lint, similarity).  Expensive Claude gates
+    (quality, copyedit, retention, originality, dialogue, metadata) are marked
+    stale_after_mutation if they cannot be refreshed without extra API cost.
+
+    Returns a dict with:
+      refresh_ok         bool   — True if no required refresh failed
+      refreshed_reports  dict   — name→report for successfully refreshed reports
+      failed_refreshes   list   — names of reports that failed to refresh
+      stale_reports      list   — names of reports marked stale (not refreshed)
+      blocking           bool   — True when a required refresh failed (OFP must be skipped)
+    """
+    result: dict = {
+        "refresh_ok":        True,
+        "refreshed_reports": {},
+        "failed_refreshes":  [],
+        "stale_reports":     [],
+        "blocking":          False,
+    }
+
+    if not artifact_state.final_review_inputs_mutated:
+        # Nothing changed — reports are still fresh
+        return result
+
+    # Determine which reports may now be stale
+    stale_candidates: list[str] = []
+    if artifact_state.script_mutated or artifact_state.dialogue_mutated:
+        stale_candidates.extend(["lint", "similarity", "originality"])
+    if artifact_state.metadata_mutated:
+        stale_candidates.append("metadata")
+    if artifact_state.script_mutated:
+        stale_candidates.extend(["retention", "dialogue"])
+
+    # Always attempt a cheap refresh (lint + similarity) when script mutated
+    rerun_lint = artifact_state.script_mutated or artifact_state.dialogue_mutated
+    rerun_similarity = artifact_state.script_mutated or artifact_state.dialogue_mutated
+
+    refresh_result = _refresh_reports_after_script_mutation(
+        script_final=script_final,
+        fact_lock=fact_lock,
+        blueprint=blueprint,
+        review_dir=review_dir,
+        gate_summary=gate_summary,
+        warnings=warnings,
+        lint_report=lint_report,
+        similarity_report=similarity_report,
+        quality_report=quality_report,
+        copyedit_report=copyedit_report,
+        source_transcript=source_transcript,
+        hinglish_level=hinglish_level,
+        target_duration_min=target_duration_min,
+        retention_report=retention_report,
+        retention_blueprint=retention_blueprint,
+        originality_report=originality_report,
+        dialogue_report=dialogue_report,
+        metadata_report=metadata_report,
+        case_glossary=case_glossary,
+        cost_mode=cost_mode,
+        rerun_lint=rerun_lint,
+        rerun_similarity=rerun_similarity,
+        rerun_quality=False,   # expensive — not refreshed here
+        rerun_copyedit=False,  # expensive — not refreshed here
+        rerun_retention=False, # expensive — not refreshed here
+        rerun_originality=False,
+        rerun_dialogue=False,
+        rerun_metadata=False,
+    )
+
+    # Collect refreshed reports
+    for name, key in (
+        ("lint",        "lint_report"),
+        ("similarity",  "similarity_report"),
+        ("originality", "originality_report"),
+        ("metadata",    "metadata_report"),
+        ("retention",   "retention_report"),
+        ("dialogue",    "dialogue_report"),
+    ):
+        rpt = refresh_result.get(key)
+        if rpt and rpt.get("refreshed_after_script_mutation"):
+            result["refreshed_reports"][name] = rpt
+
+    # Check for refresh failures — these block OFP
+    failed: list[str] = []
+    for name, key in (
+        ("similarity",  "similarity_report"),
+        ("originality", "originality_report"),
+    ):
+        rpt = refresh_result.get(key)
+        if isinstance(rpt, dict) and rpt.get("refresh_failed"):
+            failed.append(name)
+
+    if failed:
+        result["failed_refreshes"] = failed
+        result["refresh_ok"]       = False
+        result["blocking"]         = True
+        warnings.append(
+            f"Pre-OFP report refresh failed for: {failed}. "
+            "OpenAI Final Premium Gate cannot run with stale evidence."
+        )
+
+    # Mark expensive stale gates in gate_summary
+    expensive_stale = [c for c in stale_candidates if c not in result["refreshed_reports"] and c not in failed]
+    for gate_name in expensive_stale:
+        gs_key = {
+            "retention":   "retention_quality",
+            "originality": "originality_safety",
+            "dialogue":    "recreated_dialogue",
+            "metadata":    "metadata_quality",
+        }.get(gate_name, gate_name)
+        if gs_key in gate_summary:
+            gate_summary[gs_key].setdefault("stale_after_mutation", True)
+    result["stale_reports"] = expensive_stale
+
+    return result
 
 
 # ─── Folder setup ─────────────────────────────────────────────────────────────
@@ -529,6 +1165,7 @@ def _run_routing_and_rebuild(
         return script_draft, routing_plan, False
 
     # ── Step 2: Deterministic auto-fix ────────────────────────────────────────
+    _af_report: dict = {}
     try:
         script_draft, _af_report = run_deterministic_auto_fix(
             script_draft=script_draft,
@@ -542,6 +1179,44 @@ def _run_routing_and_rebuild(
     except Exception as _exc:
         logger.error("Deterministic auto-fix failed: %s", _exc)
         warnings.append(f"Deterministic auto-fix failed: {_exc}.")
+
+    # ── Step 2b: Route English-quote targets to Claude rebuild ─────────────────
+    # deterministic_auto_fix_service flags long verbatim English/source quotes but
+    # cannot safely replace complex dialogue with regex.  Convert those targets to
+    # Claude rebuild targets so premium_section_rebuild_service gets them.
+    _eq_targets = _af_report.get("english_quote_repair_targets", [])
+    if _eq_targets:
+        _existing_cids: set[str] = {
+            cid
+            for _t in routing_plan.get("claude_repair_targets", [])
+            for cid in _t.get("chunk_ids", [])
+        }
+        _new_eq_added = 0
+        for _eq in _eq_targets:
+            _cid = _eq.get("chunk_id", "")
+            if not _cid or _cid in _existing_cids:
+                continue   # already queued or invalid
+            routing_plan.setdefault("claude_repair_targets", []).append({
+                "area":                   "hindi_quality",
+                "root_cause_id":          f"eq_{_cid}",
+                "repair_instruction":     _eq.get("repair_instruction", ""),
+                "affected_targets":       [_eq],
+                "chunk_ids":              [_cid],
+                "preferred_repair_owner": "claude",
+                "reason":                 (
+                    "Verbatim English/source quote detected — requires Hindi "
+                    "translation or paraphrase, not blind regex replacement"
+                ),
+                "issue_type":             "exact_english_quote_copy",
+            })
+            _existing_cids.add(_cid)
+            _new_eq_added += 1
+        if _new_eq_added:
+            logger.info(
+                "Repair routing: appended %d English-quote chunk(s) to Claude rebuild targets",
+                _new_eq_added,
+            )
+            gate_summary.setdefault("auto_fix", {})["english_quote_targets_added"] = _new_eq_added
 
     # ── Step 3: Claude grouped rebuild ────────────────────────────────────────
     rebuild_ran = False
@@ -559,11 +1234,20 @@ def _run_routing_and_rebuild(
                 review_dir=review_dir,
                 script_dir=script_dir,
             )
-            rebuild_ran = True
             _rebuilt_n = _rebuild_report.get("rebuilt_count", 0)
-            logger.info("Premium section rebuild: %d chunk(s) rebuilt", _rebuilt_n)
+            # rebuild_ran is True only when Claude actually rebuilt ≥1 chunk.
+            # skipped=True means the service returned early (no targets found,
+            # cap exceeded, etc.) — that does not count as a rebuild.
+            rebuild_ran = (
+                _rebuilt_n > 0
+                and not _rebuild_report.get("skipped", False)
+            )
+            logger.info(
+                "Premium section rebuild: %d chunk(s) rebuilt (rebuild_ran=%s)",
+                _rebuilt_n, rebuild_ran,
+            )
             gate_summary.setdefault("auto_fix", {}).update({
-                "rebuild_ran":    True,
+                "rebuild_ran":    rebuild_ran,
                 "rebuild_chunks": _rebuilt_n,
             })
         except Exception as _exc:
@@ -1086,6 +1770,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
     _preflight_blocking = preflight_report.get("blocking", False)
     _preflight_meta_targets = preflight_report.get("metadata_repair_targets", [])
     _ran_any_repair = False  # set True when chunk OR metadata repair runs
+    artifact_state = ArtifactState()  # tracks script/metadata/dialogue mutations
 
     if not preflight_report.get("passed", False):
         pf_targets = preflight_report.get("chunk_repair_targets", [])
@@ -1123,6 +1808,12 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             json.dumps(quality_report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    # ── Gate summary — initialized here so Stage 6 repair routing can record
+    # telemetry.  Premium gate entries are added below after Stage 6 completes.
+    # Initializing early prevents NameError/UnboundLocalError when Stage 6 calls
+    # _run_routing_and_rebuild(gate_summary=gate_summary).
+    gate_summary: dict[str, dict] = {}
 
     # ── Stage 6: Targeted Chunk Repair (one pass max) ─────────────────────────
     repair_has_failures = False   # default: no repair ran, no failures
@@ -1196,6 +1887,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                 )
 
                 _ran_any_repair = True
+                artifact_state.mark_script_mutated("stage6_script_repair")
                 repair_has_failures = repair_report.get("has_failures", False)
                 repair_failed_count = repair_report.get("chunks_failed", 0)
 
@@ -1255,7 +1947,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             )
 
     # ── Premium quality gates (cost_mode=premium only) ───────────────────────
-    gate_summary: dict[str, dict] = {}
+    # gate_summary was initialized before Stage 6 — do not reset it here.
     safe_to_voice = False
 
     # Record originality_transformation gate result (set in Stage 3.75)
@@ -1382,6 +2074,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                         review_dir=review_dir,
                     )
                     _ran_any_repair = True
+                    artifact_state.mark_script_mutated("stage9a_copyedit_repair")
                     copyedit_repair_has_failures = copyedit_repair_report.get("has_failures", False)
                     if copyedit_repair_has_failures:
                         failed_n = copyedit_repair_report.get("chunks_failed", 0)
@@ -1557,9 +2250,39 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                 _dlg_fixes = _dlg_fix_report.get("total_fixes_applied", 0)
                 if _dlg_fixes:
                     logger.info(
-                        "Stage 12 deterministic auto-fix: %d fix(es) applied to dialogue",
+                        "Stage 12 deterministic auto-fix: %d fix(es) applied",
                         _dlg_fixes,
                     )
+                    # Inspect each change to set mutation flags accurately.
+                    # context field patterns:
+                    #   "chunk:<id>"              → narration / script mutated
+                    #   "recreated_dialogue:<id>" → dialogue mutated
+                    #   "title_options", "recommended_title", "description",
+                    #   "tag", "thumbnail_text", "pinned_comment" → metadata
+                    #   "folder_name"             → slug only (no OFP-relevant mutation)
+                    _METADATA_CONTEXTS = frozenset({
+                        "title_options", "recommended_title", "description",
+                        "tag", "thumbnail_text", "pinned_comment",
+                        "tags",
+                    })
+                    for _chg in _dlg_fix_report.get("changes", []):
+                        _ctx = _chg.get("context", "")
+                        if _ctx.startswith("chunk:"):
+                            _ran_any_repair = True
+                            artifact_state.mark_script_mutated(
+                                "stage12_deterministic_auto_fix_narration"
+                            )
+                        elif _ctx.startswith("recreated_dialogue:"):
+                            _ran_any_repair = True
+                            artifact_state.mark_dialogue_mutated(
+                                "stage12_deterministic_auto_fix_dialogue"
+                            )
+                        elif _ctx in _METADATA_CONTEXTS:
+                            _ran_any_repair = True
+                            artifact_state.mark_metadata_mutated(
+                                "stage12_deterministic_auto_fix_metadata"
+                            )
+                        # "folder_name" context: slug-only change; no OFP-input mutation
             except Exception as _dlg_exc:
                 logger.error("Stage 12 deterministic auto-fix failed: %s", _dlg_exc)
             # OFP gate will recheck and repair remaining issues
@@ -1588,18 +2311,42 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                 )
                 metadata_report = {"gate_passed": False, "error": str(exc)}
 
-        # Validate metadata gate report schema (non-fatal)
+        # Validate metadata gate report schema (non-fatal, with structured fallback)
         try:
             _validate_metadata_report(metadata_report, review_dir)
         except ValueError as exc:
-            logger.warning("Metadata Quality Report schema validation (non-fatal): %s", exc)
+            logger.warning("Metadata Quality Report schema validation failed — applying fallback report: %s", exc)
+            # Build a structured fallback so downstream gates always have a usable dict.
+            # The fallback marks the gate as failed and surfaces the validation error
+            # as a required_fix. Operators can inspect _metadata_quality_validation_error.txt
+            # for the full Pydantic details.
+            _meta_fallback: dict = {
+                "gate_passed": False,
+                "scores": {},
+                "required_fixes": [
+                    "Metadata quality schema validation failed — Claude returned unexpected field names or types. "
+                    "Re-run with REUSE_EXISTING_STAGE_OUTPUTS=false to get a fresh gate result.",
+                ],
+                "high_severity_issues": 1,
+                "validation_error": str(exc)[:500],
+                "_fallback": True,
+            }
+            # Overwrite the malformed report on disk with the structured fallback
+            try:
+                (review_dir / "metadata_quality_gate_report.json").write_text(
+                    json.dumps(_meta_fallback, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception as _wexc:
+                logger.warning("Could not overwrite metadata_quality_gate_report.json with fallback: %s", _wexc)
+            metadata_report = _meta_fallback
             warnings.append(
-                "Metadata Quality Report schema mismatch — gate results unreliable. "
+                "Metadata Quality Report schema mismatch — structured fallback applied "
+                "(gate_passed=False, high_severity_issues=1). "
                 "See 04-review/_metadata_quality_validation_error.txt. "
-                "Pipeline cannot auto-repair without a valid gate report; "
-                "re-run with REUSE_EXISTING_STAGE_OUTPUTS=false."
+                "Re-run with REUSE_EXISTING_STAGE_OUTPUTS=false to retry."
             )
-            status = "needs_human_review"
+            if status not in ("needs_human_review", "not_voice_ready_auto_retry_exhausted"):
+                status = "not_voice_ready_auto_retry_exhausted"
 
         # ── Stage 13a: Metadata Repair (if gate failed OR preflight blocked) ──
         # Trigger repair when:
@@ -1652,6 +2399,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                     review_dir=review_dir,
                 )
                 _ran_any_repair = True
+                artifact_state.mark_metadata_mutated("stage13a_metadata_repair")
 
                 # ── Stage 13b: Recheck Metadata Gate ─────────────────────────
                 logger.info("Stage 13b — Recheck Metadata Quality Gate (post-repair)")
@@ -1776,6 +2524,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                             review_dir=review_dir,
                         )
                         _ran_any_repair = True
+                        artifact_state.mark_script_mutated("stage9_6_retention_repair")
                         retention_repair_has_failures = retention_repair_report.get(
                             "has_failures", False
                         )
@@ -1899,9 +2648,164 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                     "rechecked": True,
                 }
                 if _post_repair_preflight_blocking:
+                    _pf_high = _post_pf_counts.get("high", 0)
+                    _pf_med  = _post_pf_counts.get("medium", 0)
+                    logger.warning(
+                        "Stage 13c — Post-repair preflight BLOCKING "
+                        "(high=%d, medium=%d) — attempting pre-OAI repair pass.",
+                        _pf_high, _pf_med,
+                    )
+                    # ── Stage 13d: Pre-OAI repair pass ───────────────────────
+                    # Before giving up and skipping OpenAI, run one deterministic
+                    # auto-fix pass + repair-routing + Claude rebuild on the
+                    # issues the preflight report surfaced. Then re-check preflight.
+                    # Do NOT re-run fact_lock / blueprint / originality_transformation.
+                    try:
+                        _pre_oai_gate_reports: dict[str, dict] = {
+                            "python_preflight": _post_pf_report,
+                            "script_quality":   quality_report,
+                        }
+                        # Add optional gates only when they are real dicts (not
+                        # bare error dicts) to avoid misleading the router.
+                        for _gr_key, _gr_val in (
+                            ("text_similarity",   similarity_report),
+                            ("originality_safety", originality_report),
+                            ("retention",         retention_report),
+                            ("metadata",          metadata_report),
+                            ("recreated_dialogue", dialogue_report),
+                        ):
+                            if isinstance(_gr_val, dict) and "error" not in _gr_val:
+                                _pre_oai_gate_reports[_gr_key] = _gr_val
+
+                        logger.info(
+                            "Stage 13d — pre-OAI repair: routing with %d gate reports",
+                            len(_pre_oai_gate_reports),
+                        )
+                        script_final, _pre_oai_routing, _pre_oai_rebuilt = (
+                            _run_routing_and_rebuild(
+                                script_draft=script_final,
+                                gate_reports=_pre_oai_gate_reports,
+                                fact_lock=fact_lock,
+                                blueprint=blueprint,
+                                retention_blueprint=retention_blueprint,
+                                originality_transformation_plan=originality_transformation_plan,
+                                case_glossary=case_glossary,
+                                hinglish_level=inp.hinglish_level,
+                                case_hint=inp.case_hint,
+                                review_dir=review_dir,
+                                script_dir=script_dir,
+                                warnings=warnings,
+                                gate_summary=gate_summary,
+                            )
+                        )
+                        gate_summary.setdefault("pre_oai_repair", {})[
+                            "ran"
+                        ] = True
+                        gate_summary["pre_oai_repair"]["rebuild_ran"] = _pre_oai_rebuilt
+                        gate_summary["pre_oai_repair"]["route"] = _pre_oai_routing.get(
+                            "route", "unknown"
+                        )
+                        artifact_state.mark_script_mutated("stage13d_pre_oai_repair")
+
+                        # ── Refresh cheap gate reports after Stage 13d mutation ────
+                        # Stage 13d changed script_final (repair/rebuild).  Refresh
+                        # lint and text-similarity immediately so Stage 14a OFP
+                        # receives evidence based on the post-repair script — not the
+                        # stale pre-repair versions that are still in memory.
+                        logger.info(
+                            "Stage 13d — refreshing lint + similarity after pre-OAI repair"
+                        )
+                        _13d_refresh = _refresh_reports_after_script_mutation(
+                            script_final=script_final,
+                            fact_lock=fact_lock,
+                            blueprint=blueprint,
+                            review_dir=review_dir,
+                            gate_summary=gate_summary,
+                            warnings=warnings,
+                            lint_report=lint_report,
+                            similarity_report=similarity_report,
+                            quality_report=quality_report,
+                            copyedit_report=copyedit_report,
+                            source_transcript=clean_transcript_text,
+                            hinglish_level=inp.hinglish_level,
+                            target_duration_min=inp.target_duration_min,
+                            retention_blueprint=retention_blueprint if retention_blueprint else None,
+                            retention_report=retention_report,
+                            originality_report=originality_report,
+                            dialogue_report=dialogue_report,
+                            metadata_report=metadata_report,
+                            cost_mode=inp.cost_mode,
+                            case_glossary=case_glossary,
+                            # Only cheap Python-only gates here — Claude gates are
+                            # too expensive to rerun at every repair pass.
+                            rerun_lint=True,
+                            rerun_similarity=True,
+                            rerun_quality=False,
+                            rerun_copyedit=False,
+                            rerun_retention=False,
+                            rerun_originality=False,
+                            rerun_dialogue=False,
+                            rerun_metadata=False,
+                        )
+                        lint_report       = _13d_refresh["lint_report"]
+                        similarity_report = _13d_refresh["similarity_report"]
+                        gate_summary.setdefault("pre_oai_repair", {})[
+                            "reports_refreshed"
+                        ] = ["lint", "similarity"]
+
+                        # Re-run Python preflight after repair attempt
+                        logger.info("Stage 13d — re-running Python preflight after pre-OAI repair")
+                        _post_pf_report2 = run_python_preflight(
+                            script_draft=script_final,
+                            fact_lock=fact_lock,
+                            case_glossary=case_glossary,
+                            review_dir=review_dir,
+                            target_duration_min=inp.target_duration_min,
+                            hinglish_level=inp.hinglish_level,
+                            label="_after_pre_oai_repair",
+                        )
+                        _post_repair_preflight_blocking = _post_pf_report2.get(
+                            "blocking", False
+                        )
+                        _post_pf_counts2 = _post_pf_report2.get("severity_counts", {})
+                        gate_summary["python_preflight"].update({
+                            "passed":       _post_pf_report2.get("passed", False),
+                            "blocking":     _post_repair_preflight_blocking,
+                            "high":         _post_pf_counts2.get("high", 0),
+                            "medium":       _post_pf_counts2.get("medium", 0),
+                            "low":          _post_pf_counts2.get("low", 0),
+                            "report":       "python_preflight_report_after_pre_oai_repair.json",
+                            "pre_oai_repair_ran": True,
+                        })
+                        if _post_repair_preflight_blocking:
+                            _pf_high = _post_pf_counts2.get("high", 0)
+                            _pf_med  = _post_pf_counts2.get("medium", 0)
+                            logger.warning(
+                                "Stage 13d — preflight still BLOCKING after pre-OAI repair "
+                                "(high=%d, medium=%d) — skipping OAI gate.",
+                                _pf_high, _pf_med,
+                            )
+                        else:
+                            logger.info(
+                                "Stage 13d — pre-OAI repair cleared preflight blocking — "
+                                "OpenAI gate will now run."
+                            )
+                    except Exception as _pre_oai_exc:
+                        logger.error(
+                            "Stage 13d — pre-OAI repair pass failed: %s — "
+                            "treating preflight as still blocking.",
+                            _pre_oai_exc,
+                        )
+                        warnings.append(
+                            f"Pre-OAI repair pass failed: {_pre_oai_exc}. "
+                            "OpenAI Final Premium Gate skipped."
+                        )
+                        _post_repair_preflight_blocking = True
+
+                if _post_repair_preflight_blocking:
                     status = "not_voice_ready_auto_retry_exhausted"
-                    high_n = _post_pf_counts.get("high", 0)
-                    med_n  = _post_pf_counts.get("medium", 0)
+                    high_n = gate_summary.get("python_preflight", {}).get("high", _post_pf_counts.get("high", 0))
+                    med_n  = gate_summary.get("python_preflight", {}).get("medium", _post_pf_counts.get("medium", 0))
                     warnings.append(
                         f"Post-repair Python preflight still BLOCKING "
                         f"(high={high_n}, medium={med_n}). "
@@ -1970,28 +2874,189 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             else:
                 # ── Stage 14a: OpenAI Final Premium Gate (combined) ───────────
 
-                # Task 5: Reload all gate reports from disk before calling the
-                # Final Premium Gate so it receives the latest repaired versions,
-                # not stale in-memory copies from before repair stages ran.
-                (lint_report, copyedit_report, quality_report, retention_report,
-                 similarity_report, originality_report, dialogue_report,
-                 metadata_report) = _reload_latest_gate_reports(
-                    review_dir,
-                    lint_report, copyedit_report, quality_report,
-                    retention_report, similarity_report, originality_report,
-                    dialogue_report, metadata_report,
+                # Mandatory freshness check: if artifact_state shows any mutation
+                # since the last gate run, attempt a cheap refresh (lint + similarity)
+                # and mark expensive gates stale. If refresh_failed, block OFP.
+                _finalize_result = _finalize_reports_before_openai(
+                    artifact_state=artifact_state,
+                    script_final=script_final,
+                    fact_lock=fact_lock,
+                    blueprint=blueprint,
+                    review_dir=review_dir,
+                    gate_summary=gate_summary,
+                    warnings=warnings,
+                    lint_report=lint_report,
+                    similarity_report=similarity_report,
+                    copyedit_report=copyedit_report,
+                    quality_report=quality_report,
+                    retention_report=retention_report or {},
+                    originality_report=originality_report or {},
+                    dialogue_report=dialogue_report or {},
+                    metadata_report=metadata_report or {},
+                    source_transcript=(
+                        # Prefer the already-cleaned in-memory string (Stage 10
+                        # defines clean_transcript_text by reading the file).
+                        # Fall back to reading the file directly (resume runs),
+                        # then to raw_transcript, then empty (triggers stale failure
+                        # in the finalization helper rather than silently using blank).
+                        (clean_transcript_text if clean_transcript_text else None)
+                        or (
+                            (episode_dir / "01-input" / "clean_transcript.txt").read_text(
+                                encoding="utf-8"
+                            )
+                            if (episode_dir / "01-input" / "clean_transcript.txt").exists()
+                            else None
+                        )
+                        or inp.raw_transcript
+                        or ""
+                    ),
+                    hinglish_level=inp.hinglish_level,
+                    target_duration_min=inp.target_duration_min,
+                    retention_blueprint=retention_blueprint,
+                    case_glossary=case_glossary,
+                    cost_mode=inp.cost_mode,
                 )
+                # Use any freshly-refreshed reports from finalization
+                for _rep_name, _rep_obj in _finalize_result["refreshed_reports"].items():
+                    if _rep_name == "lint":
+                        lint_report = _rep_obj
+                    elif _rep_name == "similarity":
+                        similarity_report = _rep_obj
+                    elif _rep_name == "originality":
+                        originality_report = _rep_obj
+                    elif _rep_name == "metadata":
+                        metadata_report = _rep_obj
+                    elif _rep_name == "retention":
+                        retention_report = _rep_obj
+                    elif _rep_name == "dialogue":
+                        dialogue_report = _rep_obj
+
+                if _finalize_result["blocking"]:
+                    _failed = _finalize_result["failed_refreshes"]
+                    logger.warning(
+                        "Stage 14a — pre-OFP finalization BLOCKING: refresh failed for %s",
+                        _failed,
+                    )
+                    gate_summary["openai_final_premium"] = {
+                        "passed":  False,
+                        "skipped": True,
+                        "reason":  f"required_gate_refresh_failed_after_script_mutation: {_failed}",
+                    }
+                    status = "not_voice_ready_auto_retry_exhausted"
+                    gate_summary["automation_status"] = "blocked_before_openai"
+
+                # Before calling OFP, ensure in-memory reports are fresh.
+                # Stage 13d already refreshed lint + similarity via
+                # _refresh_reports_after_script_mutation.  For reports that were
+                # mutated by earlier repair stages (copyedit, metadata, retention),
+                # prefer the in-memory copy if it already carries a freshness
+                # marker; otherwise fall back to the disk file so we never pass a
+                # pre-repair in-memory object.  Expensive Claude gates (quality,
+                # copyedit, retention, originality, dialogue) are NOT re-called
+                # here — that would double the API cost.
+                def _prefer_fresh(in_mem: dict, filename: str, fallback: dict) -> dict:
+                    if in_mem.get("refreshed_after_script_mutation") or \
+                       in_mem.get("refreshed_after_rebuild"):
+                        return in_mem
+                    p = review_dir / filename
+                    if p.exists():
+                        try:
+                            return json.loads(p.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                    return fallback
+
+                lint_report       = _prefer_fresh(lint_report,       "hindi_text_lint_report.json",          lint_report)
+                similarity_report = _prefer_fresh(similarity_report,  "text_similarity_report.json",          similarity_report)
+                copyedit_report   = _prefer_fresh(copyedit_report,    "hindi_copyedit_report.json",           copyedit_report)
+                quality_report    = _prefer_fresh(quality_report,     "final_script_quality_report.json",     quality_report)
+                retention_report  = _prefer_fresh(retention_report,   "retention_quality_report.json",        retention_report)
+                originality_report = _prefer_fresh(originality_report, "originality_safety_gate_report.json", originality_report)
+                dialogue_report   = _prefer_fresh(dialogue_report,    "recreated_dialogue_gate_report.json",  dialogue_report)
+                metadata_report   = _prefer_fresh(metadata_report,    "metadata_quality_gate_report.json",    metadata_report)
+
+                # Abort OFP if any required report has refresh_failed=True —
+                # we must not approve a script based on stale evidence.
+                _stale_reports = [
+                    name for name, rpt in (
+                        ("similarity", similarity_report),
+                        ("originality", originality_report),
+                    )
+                    if isinstance(rpt, dict) and rpt.get("refresh_failed")
+                ]
+                if _stale_reports:
+                    warnings.append(
+                        f"OpenAI Final Premium Gate skipped: required gate report(s) "
+                        f"are stale after script mutation ({', '.join(_stale_reports)}). "
+                        "Re-run the pipeline to refresh all gate reports before OFP."
+                    )
+                    logger.warning(
+                        "Stage 14a — OFP skipped: stale reports detected: %s",
+                        _stale_reports,
+                    )
+                    gate_summary["openai_final_premium"] = {
+                        "passed":  False,
+                        "skipped": True,
+                        "reason":  f"stale supporting reports: {_stale_reports}",
+                    }
+                    status = "not_voice_ready_auto_retry_exhausted"
+
+                # _ofp_skip: set when stale reports or finalization blocking prevents OFP
+                _ofp_skip = bool(_stale_reports) or _finalize_result["blocking"]
 
                 call_tracker.stage_start("openai_final_premium")
                 logger.info("Stage 14a — OpenAI Final Premium Gate (combined)")
+                # Final-review-input-hash guard: reuse the cached OFP report only
+                # when ALL inputs that OFP reviews are identical to the stored run.
+                # This covers narration chunks, youtube_metadata, recreated_dialogues,
+                # run parameters, and all supporting gate reports — not just narration.
+                _current_ofp_hash = _compute_final_review_input_hash(
+                    script_final=script_final,
+                    hinglish_level=inp.hinglish_level,
+                    target_duration_min=inp.target_duration_min,
+                    lint_report=lint_report,
+                    similarity_report=similarity_report,
+                    copyedit_report=copyedit_report,
+                    quality_report=quality_report,
+                    retention_report=retention_report,
+                    originality_report=originality_report,
+                    dialogue_report=dialogue_report,
+                    metadata_report=metadata_report,
+                    fact_lock=fact_lock,
+                    blueprint=blueprint,
+                    retention_blueprint=retention_blueprint,
+                    originality_transformation_plan=originality_transformation_plan,
+                )
                 existing_ofp = _try_load_existing_json(
                     review_dir / "openai_final_premium_report.json",
                     "openai_final_premium",
                     episode_dir=episode_dir, prompt_check="openai_final_premium",
                 )
                 if existing_ofp is not None:
-                    ofp_report = existing_ofp
-                else:
+                    _stored_hash = existing_ofp.get("final_review_input_hash", "")
+                    if _stored_hash and _stored_hash == _current_ofp_hash:
+                        ofp_report = existing_ofp
+                        logger.info(
+                            "Stage 14a — OFP report reused (final_review_input_hash=%s matches)",
+                            _current_ofp_hash,
+                        )
+                    else:
+                        logger.info(
+                            "Stage 14a — OFP report DISCARDED "
+                            "(stored hash %r ≠ current %r) — rerunning",
+                            _stored_hash, _current_ofp_hash,
+                        )
+                        existing_ofp = None  # force rerun below
+                if _ofp_skip:
+                    # Stale-report guard already set gate_summary["openai_final_premium"]
+                    # and status above — synthesize a failed ofp_report so downstream
+                    # code that reads ofp_report has a safe default.
+                    ofp_report = {
+                        "approved": False, "safe_to_voice": False,
+                        "overall_score": 0, "chunk_repair_targets": [],
+                        "skipped": True, "reason": "stale supporting reports",
+                    }
+                elif existing_ofp is None:
                     try:
                         ofp_report = run_openai_final_premium_gate(
                             script_draft=script_final,
@@ -2009,6 +3074,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                             review_dir=review_dir,
                             transformation_plan=originality_transformation_plan or None,
                         )
+                        ofp_report["final_review_input_hash"] = _current_ofp_hash
                     except Exception as exc:
                         logger.error("OpenAI Final Premium Gate failed: %s", exc)
                         warnings.append(
@@ -2129,56 +3195,239 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                     status = "not_voice_ready_auto_retry_exhausted"
                                     openai_repair_has_failures = True
                                 else:
-                                    # Refresh lint then recheck OFP once
+                                    # ── Post-rebuild gate refresh ──────────────
+                                    # Refresh cheap deterministic gates and reload
+                                    # all on-disk reports BEFORE calling OFP recheck,
+                                    # so the recheck never sees stale pre-rebuild data.
                                     try:
                                         lint_report = run_hindi_text_lint(
                                             script_final,
                                             hinglish_level=inp.hinglish_level,
                                         )
-                                        ofp_rebuild_recheck = run_openai_final_premium_gate(
+                                        (review_dir / "hindi_text_lint_report.json").write_text(
+                                            json.dumps(lint_report, ensure_ascii=False, indent=2),
+                                            encoding="utf-8",
+                                        )
+                                        _sim_t = (
+                                            episode_dir / "01-input" / "clean_transcript.txt"
+                                        ).read_text(encoding="utf-8")
+                                        similarity_report = run_text_similarity_check(
+                                            source_transcript=_sim_t,
                                             script_draft=script_final,
-                                            fact_lock=fact_lock,
-                                            blueprint=blueprint,
-                                            hinglish_level=inp.hinglish_level,
-                                            lint_report=lint_report,
-                                            copyedit_report=copyedit_report,
-                                            quality_report=quality_report,
-                                            retention_report=retention_report,
-                                            similarity_report=similarity_report,
-                                            originality_report=originality_report,
-                                            dialogue_report=dialogue_report,
-                                            metadata_report=metadata_report,
-                                            review_dir=review_dir,
-                                            label="_after_auto_rebuild",
-                                            transformation_plan=originality_transformation_plan or None,
                                         )
-                                        ofp_report = ofp_rebuild_recheck
-                                        _ofp_rebuild_passed = (
-                                            ofp_rebuild_recheck.get("approved", False)
-                                            and ofp_rebuild_recheck.get("safe_to_voice", False)
+                                        (review_dir / "text_similarity_report.json").write_text(
+                                            json.dumps(similarity_report, ensure_ascii=False, indent=2),
+                                            encoding="utf-8",
                                         )
-                                        gate_summary["openai_final_premium"].update({
-                                            "passed":        _ofp_rebuild_passed,
-                                            "approved":      ofp_rebuild_recheck.get("approved", False),
-                                            "safe_to_voice": ofp_rebuild_recheck.get("safe_to_voice", False),
-                                            "overall_score": ofp_rebuild_recheck.get("overall_score", 0),
-                                            "recheck":       True,
-                                            "recheck_label": "_after_auto_rebuild",
-                                        })
-                                        if _ofp_rebuild_passed:
-                                            status = "script_approved"
-                                            logger.info(
-                                                "Stage 16 adaptive — OFP recheck after auto-rebuild: PASSED"
+
+                                        # Python preflight guard — if rebuild introduced
+                                        # new safety/blocking issues, skip OFP recheck.
+                                        _rb_pf_blocking = False
+                                        try:
+                                            _rb_pf = run_python_preflight(
+                                                script_draft=script_final,
+                                                fact_lock=fact_lock,
+                                                case_glossary=case_glossary,
+                                                review_dir=review_dir,
+                                                target_duration_min=inp.target_duration_min,
+                                                hinglish_level=inp.hinglish_level,
+                                                label="_after_auto_rebuild",
                                             )
-                                        else:
+                                            _rb_pf_blocking = _rb_pf.get("blocking", False)
+                                            _rb_pf_counts = _rb_pf.get("severity_counts", {})
+                                            gate_summary["python_preflight"].update({
+                                                "passed":    _rb_pf.get("passed", False),
+                                                "blocking":  _rb_pf_blocking,
+                                                "high":      _rb_pf_counts.get("high", 0),
+                                                "medium":    _rb_pf_counts.get("medium", 0),
+                                                "low":       _rb_pf_counts.get("low", 0),
+                                                "report":    "python_preflight_report_after_auto_rebuild.json",
+                                                "rechecked": True,
+                                            })
+                                            if _rb_pf_blocking:
+                                                logger.warning(
+                                                    "Stage 16 — Post-rebuild Python preflight BLOCKING "
+                                                    "(high=%d, medium=%d) — skipping OFP recheck.",
+                                                    _rb_pf_counts.get("high", 0),
+                                                    _rb_pf_counts.get("medium", 0),
+                                                )
+                                                status = "not_voice_ready_auto_retry_exhausted"
+                                                openai_repair_has_failures = True
+                                                warnings.append(
+                                                    "Post-rebuild Python preflight BLOCKING "
+                                                    f"(high={_rb_pf_counts.get('high', 0)}, "
+                                                    f"medium={_rb_pf_counts.get('medium', 0)}) — "
+                                                    "OFP recheck skipped. Automated retry exhausted."
+                                                )
+                                        except Exception as _rb_pf_exc:
+                                            logger.error(
+                                                "Post-rebuild Python preflight failed: %s — "
+                                                "treating as blocking.",
+                                                _rb_pf_exc,
+                                            )
+                                            _rb_pf_blocking = True
                                             status = "not_voice_ready_auto_retry_exhausted"
                                             openai_repair_has_failures = True
-                                            warnings.append(
-                                                f"OFP recheck after auto-rebuild FAILED "
-                                                f"(overall_score="
-                                                f"{ofp_rebuild_recheck.get('overall_score', 0)}) — "
-                                                "automated retry exhausted — safe_to_voice=false."
+
+                                        if not _rb_pf_blocking:
+                                            # ── Post-rebuild gate regeneration ────────
+                                            # Pre-rebuild reports are stale. Regenerate
+                                            # the two most OFP-critical content gates
+                                            # (script_quality and hindi_copyedit) so the
+                                            # recheck sees evidence from the rebuilt script.
+                                            # lint and text_similarity are already fresh
+                                            # (rerun above). Expensive gates that are not
+                                            # rerun are tagged stale_after_rebuild=True so
+                                            # OFP has explicit context about provenance.
+                                            logger.info(
+                                                "Stage 16 — regenerating script_quality + "
+                                                "hindi_copyedit after rebuild"
                                             )
+                                            try:
+                                                quality_report = run_script_review(
+                                                    target_duration_min=inp.target_duration_min,
+                                                    cost_mode=inp.cost_mode,
+                                                    fact_lock=fact_lock,
+                                                    blueprint=blueprint,
+                                                    script_draft=script_final,
+                                                    review_dir=review_dir,
+                                                    is_final_review=True,
+                                                    hinglish_level=inp.hinglish_level,
+                                                    case_glossary=case_glossary,
+                                                )
+                                                quality_report["refreshed_after_rebuild"] = True
+                                                (review_dir / "final_script_quality_report.json").write_text(
+                                                    json.dumps(quality_report, ensure_ascii=False, indent=2),
+                                                    encoding="utf-8",
+                                                )
+                                                gate_summary["script_quality"] = {
+                                                    "passed": quality_report.get("approved", False),
+                                                    "scores": quality_report.get("scores", {}),
+                                                    "refreshed_after_rebuild": True,
+                                                }
+                                            except Exception as _sq16_exc:
+                                                logger.warning(
+                                                    "Stage 16 post-rebuild script review failed: %s "
+                                                    "— using pre-rebuild quality report",
+                                                    _sq16_exc,
+                                                )
+                                                quality_report["stale_after_rebuild"] = True
+
+                                            try:
+                                                copyedit_report = run_hindi_copyedit_gate(
+                                                    script_draft=script_final,
+                                                    fact_lock=fact_lock,
+                                                    blueprint=blueprint,
+                                                    hinglish_level=inp.hinglish_level,
+                                                    lint_report=lint_report,
+                                                    review_dir=review_dir,
+                                                )
+                                                copyedit_report["refreshed_after_rebuild"] = True
+                                                (review_dir / "hindi_copyedit_report.json").write_text(
+                                                    json.dumps(copyedit_report, ensure_ascii=False, indent=2),
+                                                    encoding="utf-8",
+                                                )
+                                            except Exception as _ce16_exc:
+                                                logger.warning(
+                                                    "Stage 16 post-rebuild copyedit gate failed: %s "
+                                                    "— using pre-rebuild report",
+                                                    _ce16_exc,
+                                                )
+                                                copyedit_report["stale_after_rebuild"] = True
+
+                                            # Mark expensive Claude gates as potentially
+                                            # stale — not rerun to avoid extra API cost,
+                                            # but OFP receives explicit provenance signal.
+                                            lint_report["refreshed_after_rebuild"] = True
+                                            similarity_report["refreshed_after_rebuild"] = True
+                                            _stale_gate_name_map = {
+                                                "retention_quality":  retention_report,
+                                                "originality_safety": originality_report,
+                                                "recreated_dialogue": dialogue_report,
+                                                "metadata_quality":   metadata_report,
+                                            }
+                                            for _gs_name, _sr in _stale_gate_name_map.items():
+                                                if isinstance(_sr, dict):
+                                                    _sr.setdefault("stale_after_rebuild", True)
+                                                    # Mirror stale marker into gate_summary so
+                                                    # _gate_passed_for_safe_to_voice sees it
+                                                    gate_summary.setdefault(_gs_name, {}).update({
+                                                        "stale_after_rebuild": True,
+                                                        "passed": False,
+                                                    })
+                                            # Also update quality/copyedit if they failed to refresh
+                                            if quality_report.get("stale_after_rebuild"):
+                                                gate_summary.setdefault("script_quality", {}).update({
+                                                    "stale_after_rebuild": True,
+                                                    "passed": False,
+                                                })
+                                            if copyedit_report.get("stale_after_rebuild"):
+                                                gate_summary.setdefault("hindi_copyedit", {}).update({
+                                                    "stale_after_rebuild": True,
+                                                    "passed": False,
+                                                })
+                                            ofp_rebuild_recheck = run_openai_final_premium_gate(
+                                                script_draft=script_final,
+                                                fact_lock=fact_lock,
+                                                blueprint=blueprint,
+                                                hinglish_level=inp.hinglish_level,
+                                                lint_report=lint_report,
+                                                copyedit_report=copyedit_report,
+                                                quality_report=quality_report,
+                                                retention_report=retention_report,
+                                                similarity_report=similarity_report,
+                                                originality_report=originality_report,
+                                                dialogue_report=dialogue_report,
+                                                metadata_report=metadata_report,
+                                                review_dir=review_dir,
+                                                label="_after_auto_rebuild",
+                                                transformation_plan=originality_transformation_plan or None,
+                                            )
+                                            ofp_report = ofp_rebuild_recheck
+                                            _ofp_rebuild_passed = (
+                                                ofp_rebuild_recheck.get("approved", False)
+                                                and ofp_rebuild_recheck.get("safe_to_voice", False)
+                                            )
+                                            gate_summary["openai_final_premium"].update({
+                                                "passed":        _ofp_rebuild_passed,
+                                                "approved":      ofp_rebuild_recheck.get("approved", False),
+                                                "safe_to_voice": ofp_rebuild_recheck.get("safe_to_voice", False),
+                                                "overall_score": ofp_rebuild_recheck.get("overall_score", 0),
+                                                "recheck":       True,
+                                                "recheck_label": "_after_auto_rebuild",
+                                            })
+                                            # script_approved only when OFP AND the
+                                            # freshly-regenerated quality report both
+                                            # approve. Final safe_to_voice at the bottom
+                                            # of the pipeline is the authoritative check.
+                                            _sq_approved_post = quality_report.get("approved", False)
+                                            if _ofp_rebuild_passed and _sq_approved_post:
+                                                status = "script_approved"
+                                                logger.info(
+                                                    "Stage 16 adaptive — OFP recheck + script_quality "
+                                                    "both approved after auto-rebuild: PASSED"
+                                                )
+                                            elif _ofp_rebuild_passed and not _sq_approved_post:
+                                                status = "not_voice_ready_auto_retry_exhausted"
+                                                openai_repair_has_failures = True
+                                                warnings.append(
+                                                    "OFP recheck PASSED but refreshed script quality "
+                                                    "review did not approve — not voice-ready. "
+                                                    "Automated retry exhausted."
+                                                )
+                                                logger.warning(
+                                                    "Stage 16 adaptive — OFP passed but script_quality "
+                                                    "did not approve after rebuild"
+                                                )
+                                            else:
+                                                status = "not_voice_ready_auto_retry_exhausted"
+                                                openai_repair_has_failures = True
+                                                warnings.append(
+                                                    f"OFP recheck after auto-rebuild FAILED "
+                                                    f"(overall_score="
+                                                    f"{ofp_rebuild_recheck.get('overall_score', 0)}) — "
+                                                    "automated retry exhausted — safe_to_voice=false."
+                                                )
                                     except Exception as exc:
                                         logger.error(
                                             "OFP recheck after auto-rebuild failed: %s", exc
@@ -2934,23 +4183,51 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                     openai_repair_has_failures = True
 
         else:
-            # OpenAI gates inactive — quality_mode, policy, or legacy flag disabled them
-            _skip_reason = (
-                f"quality_mode={settings.quality_mode}"
-                if settings.quality_mode != "premium_final"
-                else f"openai_review_policy={settings.openai_review_policy}"
-                if settings.openai_review_policy == "disabled"
-                else "OPENAI_REVIEW_ENABLED=false"
-            )
-            logger.info(
-                "OpenAI gates skipped (%s) — forcing needs_human_review", _skip_reason
-            )
+            # OpenAI gates inactive — determine exact reason so gate_summary is accurate
+            if _post_repair_preflight_blocking:
+                _skip_reason = "post_repair_python_preflight_blocking"
+                _skip_detail = (
+                    "Post-repair Python preflight is still blocking; "
+                    "OpenAI Final Premium Gate skipped to avoid reviewing unsafe/unready script."
+                )
+                # Status was already set to not_voice_ready_auto_retry_exhausted at
+                # the preflight check; reinforce it and mark automation_status specifically.
+                if status not in ("needs_human_review",):
+                    status = "not_voice_ready_auto_retry_exhausted"
+                gate_summary["automation_status"] = "blocked_before_openai"
+                warnings.append(
+                    "Blocked before OpenAI because deterministic Python preflight still has "
+                    "blocking issues. See 04-review/python_preflight_report_after_repair.json."
+                )
+                logger.warning("OpenAI gates skipped: %s", _skip_reason)
+            elif settings.quality_mode != "premium_final":
+                _skip_reason = f"quality_mode={settings.quality_mode}"
+                _skip_detail = (
+                    f"quality_mode is '{settings.quality_mode}', not 'premium_final' — "
+                    "OpenAI Final Premium Gate requires premium_final mode."
+                )
+                status = "needs_human_review"
+                logger.info("OpenAI gates skipped (%s) — forcing needs_human_review", _skip_reason)
+            elif settings.openai_review_policy == "disabled":
+                _skip_reason = f"openai_review_policy={settings.openai_review_policy}"
+                _skip_detail = (
+                    "OPENAI_REVIEW_POLICY=disabled — OpenAI Final Premium Gate explicitly disabled."
+                )
+                status = "needs_human_review"
+                logger.info("OpenAI gates skipped (%s) — forcing needs_human_review", _skip_reason)
+            else:
+                # openai_review_enabled=false is the only remaining case
+                _skip_reason = "OPENAI_REVIEW_ENABLED=false"
+                _skip_detail = (
+                    "OPENAI_REVIEW_ENABLED is false — OpenAI Final Premium Gate disabled by config."
+                )
+                status = "needs_human_review"
+                logger.info("OpenAI gates skipped (%s) — forcing needs_human_review", _skip_reason)
+
             gate_summary["openai_final_premium"] = {
                 "passed": False, "skipped": True,
-                "reason": (
-                    f"{_skip_reason} — Final Premium Gate did not run, "
-                    "so safe_to_voice must remain false"
-                ),
+                "reason": _skip_detail,
+                "skip_reason_code": _skip_reason,
             }
             gate_summary["openai_premium_hindi_editor"] = {
                 "passed": True, "skipped": True,
@@ -2960,11 +4237,11 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                 "passed": True, "skipped": True,
                 "reason": f"{_skip_reason} — legacy gate skipped",
             }
-            status = "needs_human_review"
-            warnings.append(
-                f"OpenAI Final Premium Gate skipped ({_skip_reason}). "
-                "safe_to_voice=False — do not run ElevenLabs until the final premium gate passes."
-            )
+            if _skip_reason != "post_repair_python_preflight_blocking":
+                warnings.append(
+                    f"OpenAI Final Premium Gate skipped ({_skip_reason}). "
+                    "safe_to_voice=False — do not run ElevenLabs until the final premium gate passes."
+                )
 
         # ── Finalize status from repair failure flags ──────────────────────────
         # Any repair failure that hasn't already updated status must be reflected
@@ -2992,17 +4269,31 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             status = "not_voice_ready_auto_retry_exhausted"
 
         # ── Final gate summary + safe_to_voice ────────────────────────────────
-        # all_gates_passed checks every content gate entry currently in gate_summary.
-        # repair_failures is added AFTER this check so it does not interfere.
-        # safe_to_voice additionally requires no_repair_failures as a belt-and-suspenders check.
+        # all_gates_passed checks ONLY the REQUIRED_SAFE_TO_VOICE_GATES allowlist.
+        # gate_summary also contains telemetry entries (repair_routing, auto_fix,
+        # pre_oai_repair, repair_telemetry, repair_failures, automation_status)
+        # that do not carry a `passed` field; iterating over all items would
+        # cause those entries to falsely block approval.
         #
         # python_preflight is evaluated via blocking (not passed) because passed=False
         # for any issue including low-only warnings, but low warnings must not block
         # safe_to_voice. See _gate_passed_for_safe_to_voice for the full decision table.
         all_gates_passed = all(
-            _gate_passed_for_safe_to_voice(name, gate)
-            for name, gate in gate_summary.items()
+            _gate_passed_for_safe_to_voice(name, gate_summary.get(name, {"passed": False}))
+            for name in REQUIRED_SAFE_TO_VOICE_GATES
         )
+
+        # ── Final authoritative status guard ──────────────────────────────────
+        # Intermediate branches (Stage 6, Stage 16 OFP recheck) may set
+        # status="script_approved" before all required gates have been evaluated.
+        # Guard here: if the required gate allowlist does not fully pass, downgrade
+        # status so safe_to_voice cannot be True from an intermediate approval alone.
+        if status == "script_approved" and not all_gates_passed:
+            status = "not_voice_ready_auto_retry_exhausted"
+            warnings.append(
+                "Final gate recheck: status downgraded from script_approved — "
+                "not all required gates passed. Check gate_summary for details."
+            )
 
         no_repair_failures = (
             (not repair_has_failures)
@@ -3113,25 +4404,44 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             if _gs.get("passed") is False and not _gs.get("skipped"):
                 _unresolved.append(_gn)
         _repair_tel = gate_summary.get("repair_telemetry", {})
+        _pf_gs = gate_summary.get("python_preflight", {})
+        _ofp_gs = gate_summary.get("openai_final_premium", {})
         _stv_trace = {
             "safe_to_voice":            safe_to_voice,
             "status":                   status,
-            "automation_status":        status,
+            "automation_status":        gate_summary.get("automation_status", status),
             "elevenlabs_ready":         safe_to_voice,
             "elevenlabs_allowed":       safe_to_voice,   # explicit alias for downstream consumers
             "blocking_reasons":         _stv_blocking,
             "unresolved_issues":        _unresolved,     # gates still failing after all repairs
-            # Top-level shortcuts (also present inside repair_telemetry)
+            # ── OpenAI gate diagnostics (Task 8) ────────────────────────────
+            "openai_review_enabled":             settings.openai_review_enabled,
+            "openai_gate_requested":             (
+                settings.openai_review_enabled
+                and settings.quality_mode == "premium_final"
+                and settings.openai_review_policy != "disabled"
+            ),
+            "openai_gate_ran":                   _openai_gates_active,
+            "openai_gate_skipped_reason":        (
+                _ofp_gs.get("skip_reason_code")
+                if _ofp_gs.get("skipped") else None
+            ),
+            # ── Python preflight diagnostics (Task 8) ───────────────────────
+            "post_repair_python_preflight_blocking": _post_repair_preflight_blocking,
+            "python_preflight_high_count":       _pf_gs.get("high", 0),
+            "python_preflight_medium_count":     _pf_gs.get("medium", 0),
+            "python_preflight_low_count":        _pf_gs.get("low", 0),
+            "python_preflight_rechecked":        _pf_gs.get("rechecked", False),
+            "pre_oai_repair_ran":                gate_summary.get(
+                "pre_oai_repair", {}
+            ).get("ran", False),
+            # ── Top-level shortcuts (also present inside repair_telemetry) ───
             "repair_route":             _repair_tel.get("repair_route", "none"),
             "python_auto_fixes_count":  _repair_tel.get("python_auto_fixes_count", 0),
             "auto_rebuild_ran":         _repair_tel.get("auto_rebuild_ran", False),
             "gate_scores": {
-                "openai_final_premium_overall": gate_summary.get(
-                    "openai_final_premium", {}
-                ).get("overall_score"),
-                "openai_final_premium_passed": gate_summary.get(
-                    "openai_final_premium", {}
-                ).get("passed"),
+                "openai_final_premium_overall": _ofp_gs.get("overall_score"),
+                "openai_final_premium_passed":  _ofp_gs.get("passed"),
                 "hindi_copyedit_passed": gate_summary.get(
                     "hindi_copyedit", {}
                 ).get("passed"),

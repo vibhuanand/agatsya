@@ -136,7 +136,7 @@ Check each of these (report in fact_issues if missing or wrong):
 WORD COUNT GUIDANCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Count all Hindi words across all hindi_narration_chunks combined.
-Estimate: word_count ÷ 120 = minutes.
+Estimate: word_count ÷ 110 = minutes.  (Hindi narration pace = 110 WPM)
 Report estimated_word_count and estimated_duration_min.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -183,6 +183,10 @@ issue_type values:
   safety                  — safety rule violation (missing label, graphic content, etc.)
   structure               — chunk is out of order, missing its purpose, or poorly anchored
   duration                — chunk is significantly over/under its target word count
+  case_glossary           — chunk uses incorrect, inconsistent, or unsafe names/terms/pronunciations
+                            compared with case_glossary.json (e.g. wrong victim/suspect name form,
+                            inconsistent place name, forbidden term, English/source spelling that
+                            should use the preferred Hindi/Hinglish form from case_glossary)
 
 Only list chunks that genuinely need repair. Do not list chunks that pass all checks.
 Do not put metadata, title, tags, thumbnail, or description issues into chunk_repair_targets.

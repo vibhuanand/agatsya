@@ -373,6 +373,17 @@ class ScriptDraft(BaseModel):
 
 # ─── Targeted chunk repair schemas ───────────────────────────────────────────
 
+# Map non-standard issue_type values produced by linters/deterministic services
+# to the nearest accepted schema type.  Normalization runs before Pydantic
+# validates the Literal, so callers get a clean type without losing intent.
+_ISSUE_TYPE_ALIASES: dict[str, str] = {
+    # exact_english_quote_copy comes from deterministic_auto_fix_service.
+    # It describes a chunk where a long English quote was copied verbatim
+    # instead of being translated — nearest semantic type is hindi_naturalness.
+    "exact_english_quote_copy": "hindi_naturalness",
+}
+
+
 class ChunkRepairTarget(BaseModel):
     chunk_id: str
     issue_type: Literal[
@@ -383,9 +394,23 @@ class ChunkRepairTarget(BaseModel):
         "safety",
         "structure",
         "duration",
+        "case_glossary",
     ]
     problem: str
     repair_instruction: str
+
+    @field_validator("issue_type", mode="before")
+    @classmethod
+    def _normalize_issue_type(cls, v: object) -> object:
+        """Normalize known alias types to an accepted Literal value.
+
+        Only maps explicitly listed aliases.  Any other unknown string is
+        passed through unchanged so that the Literal check still rejects it
+        with a clear validation error.
+        """
+        if isinstance(v, str):
+            return _ISSUE_TYPE_ALIASES.get(v, v)
+        return v
 
 
 class HinglishLevelAssessment(BaseModel):

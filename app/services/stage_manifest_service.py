@@ -54,6 +54,7 @@ _STAGE_PROMPT_MAP: dict[str, str] = {
     "metadata_repair":               "metadata_repair_agent.txt",
     "targeted_chunk_repair":         "targeted_chunk_repair_agent.txt",
     "openai_targeted_chunk_repair":  "openai_targeted_chunk_repair_agent.txt",
+    "premium_section_rebuild":       "premium_section_rebuild_agent.txt",
 }
 
 

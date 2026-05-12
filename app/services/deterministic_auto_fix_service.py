@@ -127,7 +127,74 @@ _REPLACEMENT_RULES: list[tuple[re.Pattern, str, str, str]] = [
         "Replace unsupported superlative 'most brutal'",
         "metadata",
     ),
+    # ── Explicit sexual / physical violence phrasing (Task 5) ────────────────
+    # These apply to narration chunks for any sensitive/adult-victim case.
+    (
+        re.compile(
+            r"बार[\s-]*बार\s+शारीरिक\s+और\s+यौन\s+हिंसा\s+का\s+शिकार\s+बनाया",
+            re.UNICODE | re.IGNORECASE,
+        ),
+        "उन्हें घंटों तक अमानवीय यातना सहनी पड़ी — जिसका पूरा विवरण यहाँ देना न ज़रूरी है, न सही।",
+        "Replace explicit repeated sexual violence phrase with restrained wording",
+        "both",
+    ),
+    (
+        re.compile(
+            r"ज़मीन\s+पर\s+लिटाकर\s+हाथ[\s-]*पैर\s+बाँधे\s+गए",
+            re.UNICODE | re.IGNORECASE,
+        ),
+        "दोनों को बाँधकर रखा गया",
+        "Replace physical positioning detail with restrained wording",
+        "both",
+    ),
+    (
+        re.compile(
+            r"पेड़\s+के\s+तने\s+से\s+बाँध\s+दिया\s+गया",
+            re.UNICODE | re.IGNORECASE,
+        ),
+        "दोनों को बाँधकर रखा गया",
+        "Replace physical restraint positioning detail with restrained wording",
+        "both",
+    ),
 ]
+
+# ─── Long verbatim English-quote detection ────────────────────────────────────
+# Flags chunks that contain long (≥6 word) runs of English text that may be
+# exact source-transcript quotes copied without translation.
+# Used by _fix_narration_chunks; generates repair targets but does NOT rewrite
+# automatically (rewrite requires context). Instead inserts a structured
+# chunk_repair_target for Claude repair routing.
+
+_MIN_ENGLISH_QUOTE_WORDS = 6   # flag runs of this many consecutive English words
+
+_ENGLISH_TOKEN_RE = re.compile(r"\b[A-Za-z''\-]{2,}\b")
+
+
+def _extract_long_english_runs(text: str, min_words: int = _MIN_ENGLISH_QUOTE_WORDS) -> list[str]:
+    """Return list of contiguous English word runs (≥min_words) found in text."""
+    tokens = _ENGLISH_TOKEN_RE.findall(text)
+    runs: list[str] = []
+    current: list[str] = []
+    for tok in tokens:
+        current.append(tok)
+    # Use a sliding-window approach on raw text for contiguous detection
+    # Find positions of all English tokens; group consecutive ones.
+    positions = [(m.start(), m.end(), m.group()) for m in _ENGLISH_TOKEN_RE.finditer(text)]
+    group: list[str] = []
+    prev_end = -1
+    for start, end, word in positions:
+        gap = text[prev_end:start] if prev_end >= 0 else ""
+        # Allow gaps of only whitespace/punctuation to count as "contiguous"
+        if prev_end < 0 or re.fullmatch(r"[\s,;:.\-\"\'?!]+", gap or " "):
+            group.append(word)
+        else:
+            if len(group) >= min_words:
+                runs.append(" ".join(group))
+            group = [word]
+        prev_end = end
+    if len(group) >= min_words:
+        runs.append(" ".join(group))
+    return runs
 
 # Tags to remove (exact match, case-insensitive)
 _BANNED_TAGS: list[str] = [
@@ -301,12 +368,17 @@ def _fix_narration_chunks(
     script_draft: dict,
     is_child_victim: bool,
     changes: list[dict],
+    quote_repair_targets: list[dict] | None = None,
 ) -> dict:
     """
     Fix hindi_narration_chunks.
 
-    Always applies:  legal-blame replacements (scope="both") in all narration chunks.
-    Child-victim only:  organ/graphic replacements (scope="both", child-specific patterns).
+    Always applies:  legal-blame and sensitive-phrasing replacements (scope="both").
+    Child-victim only:  organ/graphic replacements.
+
+    Also detects long verbatim English runs (≥6 words) that may be exact source
+    quotes copied without translation.  Those are NOT auto-replaced (rewrite needs
+    context) but are recorded as chunk_repair_targets in quote_repair_targets.
 
     Organ-specific patterns are identified by their replacement target — they always
     replace with "गंभीर आंतरिक चोटें" or "serious internal injuries". We apply ALL
@@ -336,6 +408,38 @@ def _fix_narration_chunks(
                 })
                 text = new_text
         chunk["text"] = text
+
+        # ── Long English quote detection ──────────────────────────────────────
+        # Flag runs of ≥6 English words — likely verbatim source dialogue.
+        # These are NOT auto-replaced; instead surfaced as repair targets.
+        if quote_repair_targets is not None:
+            long_runs = _extract_long_english_runs(text)
+            for run in long_runs:
+                quote_repair_targets.append({
+                    "chunk_id":          chunk.get("chunk_id", "unknown"),
+                    "issue_type":        "exact_english_quote_copy",
+                    "problem":           (
+                        f"Chunk contains a long verbatim English run ({len(run.split())} words): "
+                        f"'{run[:80]}'. This appears to be direct source dialogue copied without "
+                        "translation. Exact English quotes must be translated to Hindi or "
+                        "paraphrased with legal/court framing."
+                    ),
+                    "repair_instruction": (
+                        "Translate the English dialogue to Hindi or paraphrase it using court/legal "
+                        "framing. Preferred style: 'अदालत में बताए गए शब्दों का भाव यह था कि ...' "
+                        "Do not preserve exact English wording unless it is a formally quoted "
+                        "court record and absolutely necessary."
+                    ),
+                    "verbatim_run_sample": run[:120],
+                })
+                changes.append({
+                    "context": f"chunk:{chunk.get('chunk_id', '?')}",
+                    "description": f"Flagged long English quote run for Claude repair: '{run[:60]}...'",
+                    "occurrences": 1,
+                    "before_sample": run[:120],
+                    "after_sample": "(flagged — requires Hindi translation/paraphrase)",
+                })
+
     script_draft["hindi_narration_chunks"] = chunks
     return script_draft
 
@@ -409,6 +513,7 @@ def run_deterministic_auto_fix(
     import copy
     draft = copy.deepcopy(script_draft)
     changes: list[dict] = []
+    quote_repair_targets: list[dict] = []
 
     is_child = _is_child_victim_case(case_hint, draft)
     logger.info("Deterministic auto-fix: child_victim=%s, case_hint=%r", is_child, case_hint)
@@ -419,8 +524,8 @@ def run_deterministic_auto_fix(
     # 2. Fix folder slug
     draft = _fix_folder_slug(draft, changes)
 
-    # 3. Fix narration chunks (child-victim safety)
-    draft = _fix_narration_chunks(draft, is_child, changes)
+    # 3. Fix narration chunks (child-victim safety + long English quote detection)
+    draft = _fix_narration_chunks(draft, is_child, changes, quote_repair_targets=quote_repair_targets)
 
     # 4. Fix recreated dialogue disclaimers
     draft = _fix_recreated_dialogue_disclaimers(draft, changes)
@@ -434,6 +539,9 @@ def run_deterministic_auto_fix(
         "changes": changes,
         "fixes": changes,                        # alias used by tests
         "python_fixes_applied": [c["description"] for c in changes],
+        # English quote repair targets — not auto-fixed; routed to Claude repair
+        "english_quote_repair_targets": quote_repair_targets,
+        "english_quote_repair_count":   len(quote_repair_targets),
     }
 
     if review_dir is not None:

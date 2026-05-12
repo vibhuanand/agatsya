@@ -72,6 +72,12 @@ _UNRECOVERABLE_PATTERNS = [
     "malformed", "unrecoverable", "external verification",
 ]
 
+_CASE_GLOSSARY_PATTERNS = [
+    "case_glossary", "glossary", "wrong name", "incorrect name", "inconsistent name",
+    "forbidden term", "preferred hindi", "preferred hinglish", "pronunciation",
+    "name form", "place name", "victim name", "suspect name", "spelling",
+]
+
 
 def _text_matches_any(text: str, patterns: list[str]) -> bool:
     text_lower = text.lower()
@@ -88,6 +94,8 @@ def _issue_to_area(text: str) -> str:
         return "metadata"
     if _text_matches_any(text, _RECREATED_DIALOGUE_PATTERNS):
         return "recreated_dialogue"
+    if _text_matches_any(text, _CASE_GLOSSARY_PATTERNS):
+        return "case_glossary"
     if _text_matches_any(text, _RETENTION_PATTERNS):
         return "retention"
     if _text_matches_any(text, _ORIGINALITY_PATTERNS):
@@ -101,7 +109,7 @@ def _preferred_owner(area: str, is_deterministic: bool) -> str:
     """Choose the cheapest repair owner for an area."""
     if is_deterministic or area in ("metadata", "child_victim_safety", "recreated_dialogue"):
         return "python"
-    if area in ("retention", "originality", "hindi_quality", "general"):
+    if area in ("retention", "originality", "hindi_quality", "general", "case_glossary"):
         return "claude"
     return "claude"
 
