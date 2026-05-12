@@ -1,7 +1,7 @@
 """
 Fact Lock Agent — Claude agent that extracts verified facts from a transcript.
 
-Supports two modes (controlled by FACT_LOCK_MODE in .env):
+Supports three modes (controlled by FACT_LOCK_MODE in .env):
 
   research_view (default, cheap):
     Sends the pre-built beginning/middle/end research view to one Claude call.
@@ -12,13 +12,20 @@ Supports two modes (controlled by FACT_LOCK_MODE in .env):
     Runs a compact fact extraction per segment (one Claude call each).
     Merges segment results into a unified fact_lock.
     Better for very long or complex transcripts where details may fall in the middle.
-    Saves individual segment files for debugging.
+
+  auto (recommended for production):
+    Picks the best mode based on transcript size using prompt_budget_service.
+    Uses segmented when clean_chars >= LONG_TRANSCRIPT_CLEAN_CHARS_THRESHOLD (default 30 000).
+    Falls back to research_view for smaller transcripts.
+    Users never need to change .env per episode when FACT_LOCK_MODE=auto.
 
 Produces:
-  02-facts/fact_lock.json
-  02-facts/_fact_lock_raw_response.txt      (research_view mode)
-  02-facts/segments/fact_segment_NNN.json   (segmented mode only)
-  02-facts/segments/_segment_NNN_raw.txt    (segmented mode only)
+  02-facts/fact_lock.json                               (all modes)
+  02-facts/_fact_lock_raw_response.txt                  (research_view mode)
+  02-facts/fact_lock_segments/fact_segment_NNN.json     (segmented / auto-segmented)
+  02-facts/fact_lock_segments/_segment_NNN_raw.txt      (segmented / auto-segmented)
+  02-facts/fact_lock_segment_index.json                 (segmented / auto-segmented)
+  02-facts/fact_lock_merged.json                        (segmented / auto-segmented)
 """
 from __future__ import annotations
 
@@ -28,6 +35,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.claude_client import call_claude_agent, parse_package_response
+from app.services.prompt_budget_service import estimate_tokens, should_use_segmented_mode
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +312,7 @@ def _run_segmented_mode(
     facts_dir: Path,
 ) -> dict:
     """Split transcript into segments and run one fact extraction per segment."""
-    seg_dir = facts_dir / "segments"
+    seg_dir = facts_dir / "fact_lock_segments"
     seg_dir.mkdir(parents=True, exist_ok=True)
 
     segment_chars = settings.fact_lock_segment_chars
@@ -330,7 +338,7 @@ def _run_segmented_mode(
             prompt, agent_name=f"fact_lock_segment_{seg_num_str}"
         )
 
-        # Save raw segment response
+        # Save raw segment response (legacy path alias kept for compatibility)
         (seg_dir / f"_segment_{seg_num_str}_raw.txt").write_text(raw_response, encoding="utf-8")
 
         if stop_reason == "max_tokens":
@@ -349,9 +357,35 @@ def _run_segmented_mode(
         segment_facts.append(seg_facts)
 
     if not segment_facts:
-        raise ValueError("All fact_lock segments failed to parse. Check 02-facts/segments/ for raw responses.")
+        raise ValueError(
+            "All fact_lock segments failed to parse. "
+            "Check 02-facts/fact_lock_segments/ for raw responses."
+        )
 
-    return _merge_segment_facts(segment_facts, case_hint)
+    # Write segment index (list of segment files with char counts)
+    segment_index = [
+        {
+            "segment_num": i + 1,
+            "chars": len(segments[i]),
+            "parsed": (i + 1) <= len(segment_facts),
+            "file": f"fact_lock_segments/fact_segment_{str(i + 1).zfill(3)}.json",
+        }
+        for i in range(total)
+    ]
+    (facts_dir / "fact_lock_segment_index.json").write_text(
+        json.dumps({"total_segments": total, "segments": segment_index}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    merged = _merge_segment_facts(segment_facts, case_hint)
+
+    # Write the merged result before returning so callers can inspect it separately
+    (facts_dir / "fact_lock_merged.json").write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info("Segmented fact lock: merged file saved → %s/fact_lock_merged.json", facts_dir)
+
+    return merged
 
 
 # ─── Public entry point ───────────────────────────────────────────────────────
@@ -371,30 +405,59 @@ def run_fact_lock(
     Mode is controlled by FACT_LOCK_MODE in .env:
       research_view (default) — one call using transcript_research_view
       segmented               — multiple calls over clean_transcript segments
+      auto                    — uses prompt_budget_service to pick the best mode:
+                                segmented when clean_chars >= long_transcript_clean_chars_threshold,
+                                research_view otherwise.
 
     override_mode: if provided (e.g. "segmented"), takes precedence over FACT_LOCK_MODE.
     Used by the pipeline to auto-switch to segmented for long premium transcripts.
 
     Saves:
-      fact_lock.json                    — parsed, merged fact lock
-      _fact_lock_raw_response.txt       — (research_view mode)
-      segments/fact_segment_NNN.json    — (segmented mode)
-      segments/_segment_NNN_raw.txt     — (segmented mode)
+      fact_lock.json                              — parsed, merged fact lock (all modes)
+      _fact_lock_raw_response.txt                 — (research_view mode)
+      fact_lock_segments/fact_segment_NNN.json    — (segmented / auto-segmented mode)
+      fact_lock_segments/_segment_NNN_raw.txt     — (segmented / auto-segmented mode)
+      fact_lock_segment_index.json                — (segmented / auto-segmented mode)
+      fact_lock_merged.json                       — (segmented / auto-segmented mode)
 
     Returns the fact_lock dict.
     Raises ValueError on failure (raw response already saved).
     """
-    mode = (override_mode or settings.fact_lock_mode).lower().strip()
+    requested_mode = (override_mode or settings.fact_lock_mode).lower().strip()
+    mode = requested_mode  # may be overridden below for "auto"
+
+    clean_chars = len(clean_transcript) if clean_transcript else 0
+    clean_tokens = estimate_tokens(clean_chars)
 
     logger.info(
-        "Fact Lock: mode=%s, clean_transcript=%d chars, research_view=%d chars, "
-        "FACT_LOCK_MODE=%s, CLAUDE_MAX_TOKENS=%d",
-        mode,
-        len(clean_transcript),
+        "Fact Lock: requested_mode=%s, clean_transcript=%d chars (~%d tokens), "
+        "research_view=%d chars, FACT_LOCK_MODE=%s, CLAUDE_MAX_TOKENS=%d",
+        requested_mode,
+        clean_chars,
+        clean_tokens,
         len(transcript_research_view),
         settings.fact_lock_mode,
         settings.claude_max_tokens,
     )
+
+    # Auto mode: decide based on transcript size
+    if requested_mode == "auto":
+        if clean_transcript and should_use_segmented_mode(clean_chars):
+            logger.info(
+                "Fact Lock auto mode: clean_transcript %d chars >= threshold %d — "
+                "switching to segmented for thorough coverage",
+                clean_chars,
+                settings.long_transcript_clean_chars_threshold,
+            )
+            mode = "segmented"
+        else:
+            logger.info(
+                "Fact Lock auto mode: clean_transcript %d chars < threshold %d — "
+                "using research_view (fits in budget)",
+                clean_chars,
+                settings.long_transcript_clean_chars_threshold,
+            )
+            mode = "research_view"
 
     if mode == "segmented" and clean_transcript:
         logger.info("Fact Lock: using SEGMENTED mode")
@@ -404,10 +467,11 @@ def run_fact_lock(
             facts_dir=facts_dir,
         )
     else:
-        if mode == "segmented" and not clean_transcript:
+        if mode in ("segmented", "auto") and not clean_transcript:
             logger.warning(
-                "FACT_LOCK_MODE=segmented but clean_transcript was not passed — "
-                "falling back to research_view mode"
+                "FACT_LOCK_MODE=%s but clean_transcript was not passed — "
+                "falling back to research_view mode",
+                mode,
             )
         logger.info("Fact Lock: using RESEARCH_VIEW mode")
         fact_lock = _run_research_view_mode(

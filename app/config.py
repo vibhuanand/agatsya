@@ -21,6 +21,19 @@ class Settings(BaseSettings):
     # Premium retention / revenue optimization
     premium_segmented_fact_lock_threshold: int = 30000
 
+    # Token / prompt budgeting (used by prompt_budget_service + model_rate_limiter_service)
+    # Conservative estimate: ceil(chars / 3.5) tokens.
+    # safe_claude_input_tokens_per_call: max input tokens sent to Claude in a single call.
+    # safe_claude_tokens_per_minute: rolling 60-second input-token ceiling (TPM guard).
+    safe_claude_input_tokens_per_call: int = 22000
+    safe_claude_tokens_per_minute: int = 30000
+
+    # Transcript size thresholds (clean_chars).
+    # long:      switch to segmented fact lock in auto mode.
+    # very_long: segmented is required; research_view likely truncates critical facts.
+    long_transcript_clean_chars_threshold: int = 30000
+    very_long_transcript_clean_chars_threshold: int = 60000
+
     # ElevenLabs
     elevenlabs_api_key: str = ""
     elevenlabs_narrator_voice_id: str = ""

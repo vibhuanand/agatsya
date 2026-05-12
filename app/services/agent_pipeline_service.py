@@ -44,7 +44,9 @@ from app.schemas import (
     normalize_fact_lock_payload,
 )
 from app.services.transcript_cleaner_service import clean_transcript
-from app.services.claude_client import build_transcript_research_view
+from app.services.claude_client import build_transcript_research_view, RateLimitExhaustedError
+from app.services.prompt_budget_service import estimate_tokens, classify_transcript_size
+from app.services.model_rate_limiter_service import rate_limiter as _model_rate_limiter
 from app.services.fact_lock_service import run_fact_lock
 from app.services.story_blueprint_service import run_story_blueprint
 from app.services.case_glossary_service import build_case_glossary
@@ -575,6 +577,48 @@ def _run_routing_and_rebuild(
 
 def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     """
+    Public entry point. Wraps _run_agent_pipeline_inner with graceful
+    RateLimitExhaustedError handling (status=rate_limited_retry_later).
+    """
+    try:
+        return _run_agent_pipeline_inner(inp)
+    except RateLimitExhaustedError as exc:
+        slug   = _slugify(inp.case_hint)
+        ep_id  = f"{inp.episode_number}-{slug}"
+        ep_dir = settings.episodes_dir / ep_id
+        logger.error(
+            "PIPELINE ABORTED — RateLimitExhaustedError after %d retries "
+            "for agent '%s' — episode: %s",
+            exc.retry_count,
+            exc.agent_name,
+            ep_id,
+        )
+        return PackageResponse(
+            episode_id=ep_id,
+            folder_name=ep_id,
+            episode_dir=str(ep_dir),
+            status="rate_limited_retry_later",
+            files={},
+            quality_summary=None,
+            gate_summary=None,
+            safe_to_voice=False,
+            warnings=[
+                f"Pipeline aborted: Anthropic rate limit (429) exhausted after "
+                f"{exc.retry_count} retries for agent '{exc.agent_name}'. "
+                "Re-run when API capacity recovers."
+            ],
+            telemetry={
+                "error_type":  "provider_rate_limit",
+                "agent":       exc.agent_name,
+                "retry_count": exc.retry_count,
+                "message":     str(exc),
+                "stage":       exc.agent_name,
+            },
+        )
+
+
+def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
+    """
     Controlled multi-agent pipeline for script_first package generation.
 
     Stages:
@@ -613,8 +657,9 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
     slug = _slugify(inp.case_hint)
     episode_id = f"{inp.episode_number}-{slug}"
 
-    # Reset call tracker for this pipeline run
+    # Reset call tracker and rate limiter for this pipeline run
     call_tracker.reset()
+    _model_rate_limiter.reset()
 
     logger.info("=" * 60)
     logger.info(
@@ -782,6 +827,53 @@ def run_agent_pipeline(inp: EpisodeInput) -> PackageResponse:
 
     script_dir = episode_dir / "03-script"
     review_dir = episode_dir / "04-review"
+
+    # ── Effective runtime config trace ────────────────────────────────────────
+    # Written on every run so operators can audit what settings were actually used.
+    # Includes model, fact_lock_mode requested vs effective, transcript size classification,
+    # token estimates, segmented fact lock details, and rate limiter telemetry snapshot.
+    _clean_chars  = len(clean)
+    _effective_fl = effective_fact_lock_mode or settings.fact_lock_mode
+    _segmented_used = _effective_fl == "segmented"
+    _seg_count = 0
+    if _segmented_used:
+        _seg_idx_path = facts_dir / "fact_lock_segment_index.json"
+        if _seg_idx_path.exists():
+            try:
+                _seg_idx = json.loads(_seg_idx_path.read_text(encoding="utf-8"))
+                _seg_count = _seg_idx.get("total_segments", 0)
+            except Exception:
+                pass
+    _effective_runtime_config = {
+        "episode_id":                    episode_id,
+        "model":                         settings.claude_model,
+        "quality_mode":                  settings.quality_mode,
+        "openai_review_policy":          settings.openai_review_policy,
+        "fact_lock_mode_requested":      settings.fact_lock_mode,
+        "fact_lock_mode_effective":      _effective_fl,
+        "segmented_fact_lock_used":      _segmented_used,
+        "segment_count":                 _seg_count,
+        "transcript_chars_raw":          len(inp.raw_transcript),
+        "transcript_chars_clean":        _clean_chars,
+        "transcript_estimated_tokens":   estimate_tokens(_clean_chars),
+        "transcript_size_class":         classify_transcript_size(_clean_chars),
+        "research_view_chars":           len(research_view),
+        "safe_claude_input_tokens_per_call": settings.safe_claude_input_tokens_per_call,
+        "safe_claude_tokens_per_minute": settings.safe_claude_tokens_per_minute,
+        "rate_limiter_telemetry":        _model_rate_limiter.telemetry(),
+        "reuse_existing_stage_outputs":  settings.reuse_existing_stage_outputs,
+    }
+    (review_dir / "effective_runtime_config.json").write_text(
+        json.dumps(_effective_runtime_config, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info(
+        "Effective runtime config saved → %s/effective_runtime_config.json  "
+        "(fact_lock=%s, transcript=%s, %d chars)",
+        review_dir,
+        _effective_fl,
+        _effective_runtime_config["transcript_size_class"],
+        _clean_chars,
+    )
 
     # ── Stage 3.25: Case Glossary (Python, zero model cost) ─────────────────
     logger.info("Stage 3.25 — Case Glossary (Python)")
