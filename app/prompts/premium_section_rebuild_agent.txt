@@ -27,7 +27,6 @@ If this case involves a minor or child victim, apply ALL of the following:
 - Never use body injury details as a hook, curiosity gap, or retention device.
 - If one graphic fact is necessary, do NOT add another in the same chunk.
 - The narration must be respectful, factual, restrained, and non-graphic.
-- Taiwan pattern specifically: replace "फटा हुआ जिगर" or any liver/organ reference with "गंभीर आंतरिक चोटें".
 - Do NOT combine severed-finger detail and autopsy detail in the same chunk.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -49,9 +48,8 @@ METADATA SAFETY RULES
 Do NOT imply legal culpability unless legally established.
 Do NOT write: मीडिया का गुनाह, journalism killed her, media killed her.
 Do NOT use: most infamous, most shocking, most brutal, सबसे भयानक, सबसे डरावना, सबसे कुख्यात.
-Prefer factual respectful framing:
-  - Taiwan 1997 / Pai Hsiao-Yen case / media ethics / public outrage
-  - एक देश का आत्ममंथन / पत्रकारिता पर सवाल / वह सुबह जिसने Taiwan को बदल दिया
+Prefer factual respectful framing based on the verified case facts, legal outcome,
+public-interest question, and victim dignity.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CHANNEL RULES — MANDATORY

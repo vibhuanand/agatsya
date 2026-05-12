@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     max_total_model_calls: int = 999   # hard stop across all Claude + OpenAI calls
     max_repair_calls: int = 999        # stop if total repair calls (Claude) exceed this
     max_openai_repair_calls: int = 999 # stop if OpenAI targeted repair calls exceed this
+    # Soft stop used only on failed late-stage repair paths. This prevents one
+    # bad episode from burning repeated rescue calls while keeping global hard
+    # limits available for long successful runs.
+    failed_path_max_claude_repair_calls: int = 12
+    failed_path_max_openai_repair_calls: int = 4
 
     # Claude prompt caching
     # When true, stable prompt sections (channel rules, output schemas) are marked for caching
@@ -128,6 +133,14 @@ class Settings(BaseSettings):
     max_auto_rebuild_rounds: int = 1
     # Max total chunk targets a rebuild is allowed to cover (safety cap).
     max_auto_rebuild_targets: int = 12
+
+    # OpenAI cluster repair rescue.
+    # Runs only after one Claude grouped repair attempt leaves the same Python
+    # source-copy/originality/safety blocker unresolved. This is repair only;
+    # final approval still requires OpenAI Final Premium Gate.
+    openai_cluster_repair_enabled: bool = True
+    max_openai_cluster_repair_chunks: int = 4
+    max_openai_cluster_repair_rounds: int = 1
 
     # App
     app_env: str = "development"

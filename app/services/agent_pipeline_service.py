@@ -1101,6 +1101,119 @@ def _collect_pipeline_files(episode_dir: Path) -> dict[str, str]:
     return files
 
 
+def _current_repair_counts() -> dict[str, int]:
+    calls = call_tracker.get_snapshot().get("model_calls", {})
+    return {
+        "claude": int(calls.get("repair_claude", 0) or 0),
+        "openai": int(calls.get("repair_openai", 0) or 0),
+    }
+
+
+def _soft_repair_budget_exceeded(kind: str) -> str | None:
+    counts = _current_repair_counts()
+    if kind == "claude" and counts["claude"] >= settings.failed_path_max_claude_repair_calls:
+        return (
+            f"FAILED_PATH_MAX_CLAUDE_REPAIR_CALLS="
+            f"{settings.failed_path_max_claude_repair_calls} reached"
+        )
+    if kind == "openai" and counts["openai"] >= settings.failed_path_max_openai_repair_calls:
+        return (
+            f"FAILED_PATH_MAX_OPENAI_REPAIR_CALLS="
+            f"{settings.failed_path_max_openai_repair_calls} reached"
+        )
+    return None
+
+
+def _record_soft_budget_stop(
+    kind: str,
+    reason: str,
+    warnings: list[str],
+    gate_summary: dict,
+    repair_cost_telemetry: dict[str, Any] | None = None,
+) -> None:
+    msg = (
+        f"Soft {kind} repair budget exceeded ({reason}); stopping automated repair "
+        "to control cost. safe_to_voice=false."
+    )
+    warnings.append(msg)
+    gate_summary.setdefault("repair_budget", {})[f"{kind}_budget_exceeded"] = True
+    gate_summary["repair_budget"][f"{kind}_budget_reason"] = reason
+    if repair_cost_telemetry is not None:
+        repair_cost_telemetry["repair_budget_exceeded"] = True
+        repair_cost_telemetry["repair_budget_exceeded_kind"] = kind
+        repair_cost_telemetry["repair_budget_exceeded_reason"] = reason
+
+
+def _retention_score(report: dict) -> float:
+    try:
+        return float(report.get("overall_retention_score", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _retention_failure_is_localized(report: dict) -> bool:
+    """True when retention failure can still be safely repaired as targeted chunks."""
+    targets = report.get("chunk_repair_targets", []) or []
+    unique_chunks = {t.get("chunk_id", "") for t in targets if t.get("chunk_id")}
+    if not unique_chunks:
+        return False
+    if len(unique_chunks) > min(settings.openai_repair_max_chunks, 4):
+        return False
+    # Very low overall retention usually means broad structure failure, not a
+    # localized hook/transition issue worth spending OpenAI repair on.
+    return _retention_score(report) >= 7.0
+
+
+def _blocking_chunk_ids_from_reports(*reports: dict) -> set[str]:
+    chunk_ids: set[str] = set()
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        for key in ("chunk_repair_targets", "issues"):
+            for item in report.get(key, []) or []:
+                if isinstance(item, dict) and item.get("chunk_id"):
+                    chunk_ids.add(str(item["chunk_id"]))
+    return chunk_ids
+
+
+def _filter_openai_targets_to_blockers(targets: list[dict], *reports: dict) -> list[dict]:
+    blockers = _blocking_chunk_ids_from_reports(*reports)
+    if not blockers:
+        return targets
+    return [t for t in targets if t.get("chunk_id") in blockers]
+
+
+def _preflight_blocker_trace(
+    report: dict,
+    *,
+    python_fix_attempted: bool,
+    claude_repair_attempted: bool,
+    openai_repair_attempted: bool,
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for issue in (report.get("issues", []) or []) + (report.get("metadata_issues", []) or []):
+        if issue.get("severity") not in {"critical", "high", "medium"}:
+            continue
+        location = (
+            issue.get("chunk_id")
+            or issue.get("field")
+            or ("youtube_metadata" if issue in report.get("metadata_issues", []) else "unknown")
+        )
+        blockers.append({
+            "issue_type": issue.get("type", "unknown"),
+            "severity": issue.get("severity", "unknown"),
+            "location": location,
+            "problem": issue.get("problem", ""),
+            "python_fix_attempted": python_fix_attempted,
+            "claude_repair_attempted": claude_repair_attempted,
+            "openai_repair_attempted": openai_repair_attempted,
+            "recommended_next_action": (
+                "Manual review or focused prompt/schema adjustment required before another premium run."
+            ),
+        })
+    return blockers
+
+
 # ─── Shared repair-routing + rebuild helper ───────────────────────────────────
 
 def _run_routing_and_rebuild(
@@ -1117,6 +1230,7 @@ def _run_routing_and_rebuild(
     script_dir: Path,
     warnings: list[str],
     gate_summary: dict,
+    root_cause_repair_attempts: dict[str, int] | None = None,
 ) -> tuple[dict, dict, bool]:
     """
     Step 1: Run repair_routing_service to classify gate failures into root causes.
@@ -1137,6 +1251,9 @@ def _run_routing_and_rebuild(
             all_gate_reports=gate_reports,
             openai_repair_max_chunks=settings.openai_repair_max_chunks,
             review_dir=review_dir,
+            script_draft=script_draft,
+            max_cluster_size=settings.max_openai_cluster_repair_chunks,
+            previous_root_cause_attempts=root_cause_repair_attempts or {},
         )
         _route = routing_plan.get("route", "stop_not_voice_ready")
         logger.info(
@@ -1151,6 +1268,15 @@ def _run_routing_and_rebuild(
             "root_cause_count":    len(routing_plan.get("root_causes", [])),
             "python_fixes_count":  len(routing_plan.get("python_fixes", [])),
             "claude_targets_count": len(routing_plan.get("claude_repair_targets", [])),
+            "reconstruction_cluster_count": routing_plan.get("reconstruction_cluster_count", 0),
+            "source_shaped_reconstruction_detected": routing_plan.get(
+                "source_shaped_reconstruction_detected", False
+            ),
+            "claude_repair_skipped_due_previous_failure": routing_plan.get(
+                "claude_repair_skipped_due_previous_failure", False
+            ),
+            "estimated_model_calls_saved": routing_plan.get("estimated_model_calls_saved", 0),
+            "repeat_root_cause_detected": routing_plan.get("repeat_root_cause_detected", []),
         }
     except Exception as _exc:
         logger.error("Repair routing failed: %s", _exc)
@@ -1221,6 +1347,12 @@ def _run_routing_and_rebuild(
     # ── Step 3: Claude grouped rebuild ────────────────────────────────────────
     rebuild_ran = False
     if settings.auto_rebuild_enabled and routing_plan.get("claude_repair_targets"):
+        _budget_reason = _soft_repair_budget_exceeded("claude")
+        if _budget_reason:
+            _record_soft_budget_stop("claude", _budget_reason, warnings, gate_summary)
+            routing_plan.setdefault("notes", []).append(_budget_reason)
+            routing_plan["route"] = "stop_not_voice_ready"
+            return script_draft, routing_plan, False
         try:
             script_draft, _rebuild_report = run_premium_section_rebuild(
                 script_draft=script_draft,
@@ -1250,6 +1382,11 @@ def _run_routing_and_rebuild(
                 "rebuild_ran":    rebuild_ran,
                 "rebuild_chunks": _rebuilt_n,
             })
+            if rebuild_ran and root_cause_repair_attempts is not None:
+                for target in routing_plan.get("claude_repair_targets", []):
+                    key = target.get("root_cause_key") or target.get("root_cause_id")
+                    if key:
+                        root_cause_repair_attempts[key] = root_cause_repair_attempts.get(key, 0) + 1
         except Exception as _exc:
             logger.error("Premium section rebuild failed: %s", _exc)
             warnings.append(f"Premium section rebuild failed: {_exc}.")
@@ -1765,12 +1902,39 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
         review_dir=review_dir,
         target_duration_min=inp.target_duration_min,
         hinglish_level=inp.hinglish_level,
+        source_transcript=clean,
     )
     # Carry preflight blocking + metadata targets forward so Stage 13a can use them.
     _preflight_blocking = preflight_report.get("blocking", False)
     _preflight_meta_targets = preflight_report.get("metadata_repair_targets", [])
     _ran_any_repair = False  # set True when chunk OR metadata repair runs
     artifact_state = ArtifactState()  # tracks script/metadata/dialogue mutations
+    if preflight_report.get("metadata_python_fixes_applied"):
+        artifact_state.mark_metadata_mutated("stage5_5_metadata_python_autofix")
+    root_cause_repair_attempts: dict[str, int] = {}
+    repair_cost_telemetry: dict[str, Any] = {
+        "root_cause_repair_attempts": root_cause_repair_attempts,
+        "claude_repair_skipped_due_previous_failure": False,
+        "openai_cluster_repair_ran": False,
+        "openai_cluster_repair_chunks": [],
+        "python_blocked_before_openai_final": False,
+        "estimated_claude_calls_saved": 0,
+        "repeat_root_cause_detected": [],
+        "source_shaped_reconstruction_detected": preflight_report.get(
+            "source_shaped_reconstruction_detected", False
+        ),
+        "reconstruction_cluster_count": len(
+            preflight_report.get("reconstruction_cluster_candidates", [])
+        ),
+        "remaining_root_causes": [],
+        "retention_blocked_before_openai": False,
+        "retention_repair_attempted": False,
+        "retention_score_after_repair": None,
+        "repair_budget_exceeded": False,
+        "repair_budget_exceeded_kind": None,
+        "repair_budget_exceeded_reason": None,
+    }
+    post_openai_preflight_blockers: list[dict[str, Any]] = []
 
     if not preflight_report.get("passed", False):
         pf_targets = preflight_report.get("chunk_repair_targets", [])
@@ -1851,6 +2015,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                         script_dir=script_dir,
                         warnings=warnings,
                         gate_summary=gate_summary,
+                        root_cause_repair_attempts=root_cause_repair_attempts,
                     )
                     if _s6_routing.get("route") == "stop_not_voice_ready":
                         status = "not_voice_ready_auto_retry_exhausted"
@@ -1890,6 +2055,28 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                 artifact_state.mark_script_mutated("stage6_script_repair")
                 repair_has_failures = repair_report.get("has_failures", False)
                 repair_failed_count = repair_report.get("chunks_failed", 0)
+                # If Stage 6 repaired deterministic source-copy/reconstruction
+                # targets that came from Python preflight, count that as the one
+                # allowed Claude attempt for those root causes. If the same root
+                # cause survives the post-repair preflight, routing will escalate
+                # to OpenAI cluster repair instead of spending Claude again.
+                if preflight_report.get("source_shaped_reconstruction_detected"):
+                    _initial_source_routing = run_repair_routing(
+                        all_gate_reports={"python_preflight": preflight_report},
+                        openai_repair_max_chunks=settings.openai_repair_max_chunks,
+                        review_dir=None,
+                        script_draft=script_draft,
+                        max_cluster_size=settings.max_openai_cluster_repair_chunks,
+                        previous_root_cause_attempts=root_cause_repair_attempts,
+                    )
+                    for _cluster in _initial_source_routing.get(
+                        "source_copy_reconstruction_clusters", []
+                    ):
+                        _key = _cluster.get("root_cause_key")
+                        if _key:
+                            root_cause_repair_attempts[_key] = (
+                                root_cause_repair_attempts.get(_key, 0) + 1
+                            )
 
                 if repair_has_failures:
                     warnings.append(
@@ -1979,6 +2166,10 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
         "report":    "python_preflight_report.json",
         "rechecked": False,
     }
+
+    retention_blocked_before_openai = False
+    retention_repair_attempted = False
+    retention_score_after_repair: float | None = None
 
     if inp.cost_mode == "premium" and settings.skip_final_gates:
         # ── SKIP_FINAL_GATES mode — bypass all premium gates ──────────────────
@@ -2450,6 +2641,9 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             status = "not_voice_ready_auto_retry_exhausted"
 
         # ── Stage 9.5: Retention Quality Gate ────────────────────────────────
+        retention_blocked_before_openai = False
+        retention_repair_attempted = False
+        retention_score_after_repair: float | None = None
         retention_repair_has_failures = False
         if retention_blueprint:
             logger.info("Stage 9.5 — Retention Quality Gate")
@@ -2508,6 +2702,8 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                 rt_targets = retention_report.get("chunk_repair_targets", [])
 
                 if rt_targets:
+                    retention_repair_attempted = True
+                    repair_cost_telemetry["retention_repair_attempted"] = True
                     # ── Stage 9.6: Retention Targeted Repair ─────────────────
                     logger.info(
                         "Stage 9.6 — Retention Targeted Repair (%d target(s))", len(rt_targets)
@@ -2548,6 +2744,8 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                 is_recheck=True,
                             )
                             retention_report = retention_recheck
+                            retention_score_after_repair = _retention_score(retention_recheck)
+                            repair_cost_telemetry["retention_score_after_repair"] = retention_score_after_repair
                             rq_now_passed = retention_recheck.get("approved", False)
                             gate_summary["retention_quality"] = {
                                 "passed":                  rq_now_passed,
@@ -2567,6 +2765,14 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                 logger.info("Retention quality recheck: PASSED")
                             else:
                                 status = "not_voice_ready_auto_retry_exhausted"
+                                if not _retention_failure_is_localized(retention_recheck):
+                                    retention_blocked_before_openai = True
+                                    repair_cost_telemetry["retention_blocked_before_openai"] = True
+                                    warnings.append(
+                                        "Retention failure remains broad after one repair pass; "
+                                        "OpenAI Final Premium Gate will be skipped to avoid expensive "
+                                        "non-localized repair. See 04-review/retention_quality_report.json."
+                                    )
                                 logger.warning(
                                     "Retention quality recheck: still FAILED "
                                     "(overall=%s)",
@@ -2593,9 +2799,11 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                         retention_repair_has_failures = True
                         status = "not_voice_ready_auto_retry_exhausted"
                 else:
+                    retention_blocked_before_openai = True
+                    repair_cost_telemetry["retention_blocked_before_openai"] = True
                     warnings.append(
                         "Retention quality gate FAILED but no chunk_repair_targets provided. "
-                        "OFP gate will include retention issues in auto-rebuild. "
+                        "OpenAI Final Premium Gate will be skipped because the failure is not localized. "
                         "See 04-review/retention_quality_report.json."
                     )
                     status = "not_voice_ready_auto_retry_exhausted"
@@ -2635,8 +2843,11 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                     target_duration_min=inp.target_duration_min,
                     hinglish_level=inp.hinglish_level,
                     label="_after_repair",
+                    source_transcript=clean_transcript_text,
                 )
                 _post_repair_preflight_blocking = _post_pf_report.get("blocking", False)
+                if _post_pf_report.get("metadata_python_fixes_applied"):
+                    artifact_state.mark_metadata_mutated("stage13c_metadata_python_autofix")
                 _post_pf_counts = _post_pf_report.get("severity_counts", {})
                 gate_summary["python_preflight"] = {
                     "passed":    _post_pf_report.get("passed", False),
@@ -2696,6 +2907,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                 script_dir=script_dir,
                                 warnings=warnings,
                                 gate_summary=gate_summary,
+                                root_cause_repair_attempts=root_cause_repair_attempts,
                             )
                         )
                         gate_summary.setdefault("pre_oai_repair", {})[
@@ -2763,10 +2975,13 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                             target_duration_min=inp.target_duration_min,
                             hinglish_level=inp.hinglish_level,
                             label="_after_pre_oai_repair",
+                            source_transcript=clean_transcript_text,
                         )
                         _post_repair_preflight_blocking = _post_pf_report2.get(
                             "blocking", False
                         )
+                        if _post_pf_report2.get("metadata_python_fixes_applied"):
+                            artifact_state.mark_metadata_mutated("stage13d_metadata_python_autofix")
                         _post_pf_counts2 = _post_pf_report2.get("severity_counts", {})
                         gate_summary["python_preflight"].update({
                             "passed":       _post_pf_report2.get("passed", False),
@@ -2782,9 +2997,141 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                             _pf_med  = _post_pf_counts2.get("medium", 0)
                             logger.warning(
                                 "Stage 13d — preflight still BLOCKING after pre-OAI repair "
-                                "(high=%d, medium=%d) — skipping OAI gate.",
+                                "(high=%d, medium=%d) — evaluating OpenAI cluster rescue.",
                                 _pf_high, _pf_med,
                             )
+                            _cluster_reports = {
+                                "python_preflight": _post_pf_report2,
+                                "script_quality": quality_report,
+                                "text_similarity": similarity_report,
+                            }
+                            _cluster_routing = run_repair_routing(
+                                all_gate_reports=_cluster_reports,
+                                openai_repair_max_chunks=settings.max_openai_cluster_repair_chunks,
+                                review_dir=review_dir,
+                                script_draft=script_final,
+                                max_cluster_size=settings.max_openai_cluster_repair_chunks,
+                                previous_root_cause_attempts=root_cause_repair_attempts,
+                            )
+                            repair_cost_telemetry["claude_repair_skipped_due_previous_failure"] = (
+                                _cluster_routing.get("claude_repair_skipped_due_previous_failure", False)
+                            )
+                            repair_cost_telemetry["repeat_root_cause_detected"] = _cluster_routing.get(
+                                "repeat_root_cause_detected", []
+                            )
+                            repair_cost_telemetry["reconstruction_cluster_count"] = _cluster_routing.get(
+                                "reconstruction_cluster_count", 0
+                            )
+                            repair_cost_telemetry["source_shaped_reconstruction_detected"] = (
+                                repair_cost_telemetry["source_shaped_reconstruction_detected"]
+                                or _cluster_routing.get("source_shaped_reconstruction_detected", False)
+                            )
+                            _cluster_targets = _cluster_routing.get("openai_repair_targets", [])
+                            _cluster_chunk_ids = list(dict.fromkeys(
+                                t.get("chunk_id", "") for t in _cluster_targets if t.get("chunk_id")
+                            ))
+                            if (
+                                settings.openai_cluster_repair_enabled
+                                and settings.openai_repair_enabled
+                                and bool(settings.openai_api_key)
+                                and _cluster_targets
+                                and len(_cluster_chunk_ids) <= settings.max_openai_cluster_repair_chunks
+                            ):
+                                _budget_reason = _soft_repair_budget_exceeded("openai")
+                                if _budget_reason:
+                                    _record_soft_budget_stop(
+                                        "openai",
+                                        _budget_reason,
+                                        warnings,
+                                        gate_summary,
+                                        repair_cost_telemetry,
+                                    )
+                                    openai_repair_has_failures = True
+                                    status = "not_voice_ready_auto_retry_exhausted"
+                                    raise RuntimeError(_budget_reason)
+                                logger.info(
+                                    "Stage 13e — OpenAI cluster repair rescue (%d chunks)",
+                                    len(_cluster_chunk_ids),
+                                )
+                                script_final, _cluster_repair_report = run_openai_targeted_chunk_repair(
+                                    script_draft=script_final,
+                                    repair_targets=_cluster_targets,
+                                    fact_lock=fact_lock,
+                                    blueprint=blueprint,
+                                    hinglish_level=inp.hinglish_level,
+                                    script_dir=script_dir,
+                                    review_dir=review_dir,
+                                )
+                                artifact_state.mark_script_mutated("stage13e_openai_cluster_repair")
+                                _ran_any_repair = True
+                                repair_cost_telemetry["openai_cluster_repair_ran"] = True
+                                repair_cost_telemetry["openai_cluster_repair_chunks"] = _cluster_chunk_ids
+                                openai_repair_has_failures = _cluster_repair_report.get("has_failures", False)
+                                if openai_repair_has_failures:
+                                    warnings.append(
+                                        "OpenAI cluster repair had chunk failures. "
+                                        "Automated retry exhausted — safe_to_voice=false."
+                                    )
+
+                                _post_pf_report2 = run_python_preflight(
+                                    script_draft=script_final,
+                                    fact_lock=fact_lock,
+                                    case_glossary=case_glossary,
+                                    review_dir=review_dir,
+                                    target_duration_min=inp.target_duration_min,
+                                    hinglish_level=inp.hinglish_level,
+                                    label="_after_openai_cluster_repair",
+                                    source_transcript=clean_transcript_text,
+                                )
+                                _post_repair_preflight_blocking = _post_pf_report2.get("blocking", False)
+                                _post_pf_counts2 = _post_pf_report2.get("severity_counts", {})
+                                gate_summary["python_preflight"].update({
+                                    "passed": _post_pf_report2.get("passed", False),
+                                    "blocking": _post_repair_preflight_blocking,
+                                    "high": _post_pf_counts2.get("high", 0),
+                                    "medium": _post_pf_counts2.get("medium", 0),
+                                    "low": _post_pf_counts2.get("low", 0),
+                                    "report": "python_preflight_report_after_openai_cluster_repair.json",
+                                    "openai_cluster_repair_ran": True,
+                                })
+                                _13e_refresh = _refresh_reports_after_script_mutation(
+                                    script_final=script_final,
+                                    fact_lock=fact_lock,
+                                    blueprint=blueprint,
+                                    review_dir=review_dir,
+                                    gate_summary=gate_summary,
+                                    warnings=warnings,
+                                    lint_report=lint_report,
+                                    similarity_report=similarity_report,
+                                    quality_report=quality_report,
+                                    copyedit_report=copyedit_report,
+                                    source_transcript=clean_transcript_text,
+                                    hinglish_level=inp.hinglish_level,
+                                    target_duration_min=inp.target_duration_min,
+                                    retention_blueprint=retention_blueprint if retention_blueprint else None,
+                                    retention_report=retention_report,
+                                    originality_report=originality_report,
+                                    dialogue_report=dialogue_report,
+                                    metadata_report=metadata_report,
+                                    cost_mode=inp.cost_mode,
+                                    case_glossary=case_glossary,
+                                    rerun_lint=True,
+                                    rerun_similarity=True,
+                                    rerun_quality=False,
+                                    rerun_copyedit=False,
+                                    rerun_retention=False,
+                                    rerun_originality=False,
+                                    rerun_dialogue=False,
+                                    rerun_metadata=False,
+                                )
+                                lint_report = _13e_refresh["lint_report"]
+                                similarity_report = _13e_refresh["similarity_report"]
+                            else:
+                                repair_cost_telemetry["python_blocked_before_openai_final"] = True
+                                repair_cost_telemetry["remaining_root_causes"] = [
+                                    t.get("root_cause_key", t.get("chunk_id", ""))
+                                    for t in _cluster_targets
+                                ]
                         else:
                             logger.info(
                                 "Stage 13d — pre-OAI repair cleared preflight blocking — "
@@ -2845,6 +3192,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             and settings.quality_mode == "premium_final"
             and settings.openai_review_policy != "disabled"
             and not _post_repair_preflight_blocking  # skip OFP if still blocking
+            and not retention_blocked_before_openai
         )
 
         if _openai_gates_active:
@@ -3156,7 +3504,14 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
 
                     # ── Stage 16: OpenAI Targeted Chunk Repair (adaptive) ─────
                     if not ofp_gate_passed and settings.openai_repair_enabled:
-                        ofp_targets = ofp_report.get("chunk_repair_targets", [])
+                        ofp_targets = _filter_openai_targets_to_blockers(
+                            ofp_report.get("chunk_repair_targets", []),
+                            gate_summary.get("python_preflight", {}),
+                            quality_report,
+                            retention_report,
+                            metadata_report,
+                            similarity_report,
+                        )
                         if ofp_targets:
                             if len(ofp_targets) > settings.openai_repair_max_chunks:
                                 logger.warning(
@@ -3189,6 +3544,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                         script_dir=script_dir,
                                         warnings=warnings,
                                         gate_summary=gate_summary,
+                                        root_cause_repair_attempts=root_cause_repair_attempts,
                                     )
                                 )
                                 if _routing_plan.get("route") == "stop_not_voice_ready":
@@ -3232,6 +3588,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                                 target_duration_min=inp.target_duration_min,
                                                 hinglish_level=inp.hinglish_level,
                                                 label="_after_auto_rebuild",
+                                                source_transcript=_sim_t,
                                             )
                                             _rb_pf_blocking = _rb_pf.get("blocking", False)
                                             _rb_pf_counts = _rb_pf.get("severity_counts", {})
@@ -3439,6 +3796,22 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                             "Automated retry exhausted — safe_to_voice=false."
                                         )
                             else:
+                                _budget_reason = _soft_repair_budget_exceeded("openai")
+                                if _budget_reason:
+                                    _record_soft_budget_stop(
+                                        "openai",
+                                        _budget_reason,
+                                        warnings,
+                                        gate_summary,
+                                        repair_cost_telemetry,
+                                    )
+                                    status = "not_voice_ready_auto_retry_exhausted"
+                                    openai_repair_has_failures = True
+                                    ofp_targets = []
+                                if not ofp_targets:
+                                    logger.info(
+                                        "Stage 16 — OpenAI targeted repair has no current blocker targets."
+                                    )
                                 logger.info(
                                     "Stage 16 — OpenAI Targeted Chunk Repair (%d target(s))",
                                     len(ofp_targets),
@@ -3484,12 +3857,21 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                             target_duration_min=inp.target_duration_min,
                                             hinglish_level=inp.hinglish_level,
                                             label="_after_openai_repair",
+                                            source_transcript=clean_transcript_text,
                                         )
                                         _post_oai_pf_blocking = _post_oai_pf.get(
                                             "blocking", False
                                         )
                                         if _post_oai_pf_blocking:
                                             _po_counts = _post_oai_pf.get("severity_counts", {})
+                                            post_openai_preflight_blockers = _preflight_blocker_trace(
+                                                _post_oai_pf,
+                                                python_fix_attempted=bool(
+                                                    _post_oai_pf.get("metadata_python_fixes_applied")
+                                                ),
+                                                claude_repair_attempted=True,
+                                                openai_repair_attempted=True,
+                                            )
                                             status = "not_voice_ready_auto_retry_exhausted"
                                             gate_summary["python_preflight"].update({
                                                 "passed":    False,
@@ -3826,6 +4208,14 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                             else:
                                 combined_targets[cid] = dict(t)
                         all_oai_targets = list(combined_targets.values())
+                        all_oai_targets = _filter_openai_targets_to_blockers(
+                            all_oai_targets,
+                            gate_summary.get("python_preflight", {}),
+                            quality_report,
+                            retention_report,
+                            metadata_report,
+                            similarity_report,
+                        )
 
                         if all_oai_targets:
                             if len(all_oai_targets) > settings.openai_repair_max_chunks:
@@ -3861,6 +4251,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                         script_dir=script_dir,
                                         warnings=warnings,
                                         gate_summary=gate_summary,
+                                        root_cause_repair_attempts=root_cause_repair_attempts,
                                     )
                                 )
                                 if _routing_plan_always.get("route") == "stop_not_voice_ready":
@@ -4006,6 +4397,18 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                             "Automated retry exhausted — safe_to_voice=false."
                                         )
                             else:
+                                _budget_reason = _soft_repair_budget_exceeded("openai")
+                                if _budget_reason:
+                                    _record_soft_budget_stop(
+                                        "openai",
+                                        _budget_reason,
+                                        warnings,
+                                        gate_summary,
+                                        repair_cost_telemetry,
+                                    )
+                                    status = "not_voice_ready_auto_retry_exhausted"
+                                    openai_repair_has_failures = True
+                                    all_oai_targets = []
                                 logger.info(
                                     "Stage 16 — OpenAI Targeted Chunk Repair (%d target(s))",
                                     len(all_oai_targets),
@@ -4130,9 +4533,18 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                                             target_duration_min=inp.target_duration_min,
                                             hinglish_level=inp.hinglish_level,
                                             label="_after_openai_repair",
+                                            source_transcript=clean_transcript_text,
                                         )
                                         if _post_oai_pf_a.get("blocking", False):
                                             _poa_counts = _post_oai_pf_a.get("severity_counts", {})
+                                            post_openai_preflight_blockers = _preflight_blocker_trace(
+                                                _post_oai_pf_a,
+                                                python_fix_attempted=bool(
+                                                    _post_oai_pf_a.get("metadata_python_fixes_applied")
+                                                ),
+                                                claude_repair_attempted=True,
+                                                openai_repair_attempted=True,
+                                            )
                                             status = "not_voice_ready_auto_retry_exhausted"
                                             gate_summary["python_preflight"].update({
                                                 "passed":    False,
@@ -4200,6 +4612,15 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                     "blocking issues. See 04-review/python_preflight_report_after_repair.json."
                 )
                 logger.warning("OpenAI gates skipped: %s", _skip_reason)
+            elif retention_blocked_before_openai:
+                _skip_reason = "retention_blocked_before_openai"
+                _skip_detail = (
+                    "Retention quality remains broadly below threshold after one repair pass; "
+                    "OpenAI Final Premium Gate skipped to avoid broad expensive repair."
+                )
+                status = "not_voice_ready_auto_retry_exhausted"
+                gate_summary["automation_status"] = "blocked_before_openai"
+                logger.warning("OpenAI gates skipped: %s", _skip_reason)
             elif settings.quality_mode != "premium_final":
                 _skip_reason = f"quality_mode={settings.quality_mode}"
                 _skip_detail = (
@@ -4237,7 +4658,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                 "passed": True, "skipped": True,
                 "reason": f"{_skip_reason} — legacy gate skipped",
             }
-            if _skip_reason != "post_repair_python_preflight_blocking":
+            if _skip_reason not in {"post_repair_python_preflight_blocking", "retention_blocked_before_openai"}:
                 warnings.append(
                     f"OpenAI Final Premium Gate skipped ({_skip_reason}). "
                     "safe_to_voice=False — do not run ElevenLabs until the final premium gate passes."
@@ -4361,6 +4782,16 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
         gate_summary["automation_status"] = status
         _rr_tel = gate_summary.get("repair_routing", {})
         _af_tel = gate_summary.get("auto_fix", {})
+        repair_cost_telemetry["root_cause_repair_attempts"] = dict(root_cause_repair_attempts)
+        repair_cost_telemetry["estimated_claude_calls_saved"] = max(
+            repair_cost_telemetry.get("estimated_claude_calls_saved", 0),
+            _rr_tel.get("estimated_model_calls_saved", 0),
+        )
+        repair_cost_telemetry["python_blocked_before_openai_final"] = (
+            repair_cost_telemetry.get("python_blocked_before_openai_final", False)
+            or _post_repair_preflight_blocking
+            or retention_blocked_before_openai
+        )
         gate_summary["repair_telemetry"] = {
             "repair_route":                _rr_tel.get("route", "none"),
             "root_cause_count":            _rr_tel.get("root_cause_count", 0),
@@ -4374,6 +4805,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
                     "python_only", "claude_grouped_repair", "auto_rebuild_required"
                 )
             ),
+            **repair_cost_telemetry,
         }
 
         # ── Safe-to-voice decision trace (04-review/) ─────────────────────────
@@ -4428,6 +4860,7 @@ def _run_agent_pipeline_inner(inp: EpisodeInput) -> PackageResponse:
             ),
             # ── Python preflight diagnostics (Task 8) ───────────────────────
             "post_repair_python_preflight_blocking": _post_repair_preflight_blocking,
+            "post_openai_preflight_blockers": post_openai_preflight_blockers,
             "python_preflight_high_count":       _pf_gs.get("high", 0),
             "python_preflight_medium_count":     _pf_gs.get("medium", 0),
             "python_preflight_low_count":        _pf_gs.get("low", 0),
